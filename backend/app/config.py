@@ -37,6 +37,15 @@ class AppConfig(BaseModel):
         }
     )
     providers: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    permissions: dict[str, str] = Field(
+        default_factory=lambda: {
+            "list_files": "allow", "read_file": "allow", "write_file": "allow",
+            "search": "allow", "run": "allow", "web_search": "allow",
+            "web_fetch": "allow", "todo": "allow", "mcp": "ask",
+        }
+    )
+    hooks: dict[str, str] = Field(default_factory=dict)
+    mcp_servers: list[dict[str, Any]] = Field(default_factory=list)
 
     def safe_dict(self) -> dict[str, Any]:
         """Config safe for API responses — guaranteed secret-free."""

@@ -1,0 +1,9 @@
+# AK Dev Arena — optional engines (install what you need).
+# The core app works without any of these; each lights up automatically
+# when installed. See the install hint if a feature says it's missing.
+
+aider-chat>=0.80      # real tree-sitter repo maps (best on Python 3.11/3.12)
+mcp>=1.0              # Anthropic Model Context Protocol client
+ddgs>=9.0             # free web search (no API key)
+faster-whisper>=1.0   # local speech-to-text (Voice Mode)
+edge-tts>=6.0         # free text-to-speech (Voice Mode)

@@ -8,7 +8,7 @@ import Build from "./components/Build";
 import Review from "./components/Review";
 import Voice from "./components/Voice";
 import Palette, { type PaletteAction } from "./components/Palette";
-import { getModels, getProviders, getUsage, streamChat } from "./api";
+import { getModels, getProviders, getUsage, slashRun, streamChat } from "./api";
 import type { ChatMessage, ModelEntry, ModelQuery, ProviderEntry, UsageSummary } from "./api";
 
 const MODES: ModeDef[] = [
@@ -83,8 +83,33 @@ export default function App() {
   const activeEntry = useMemo(() => models.find((m) => m.id === currentModel), [models, currentModel]);
   const ready = backendUp === true && (activeEntry?.configured ?? false);
 
+  const pushAssistant = (content: string) => {
+    setMessages((prev) => {
+      const copy = [...prev];
+      copy[copy.length - 1] = { role: "assistant", content };
+      return copy;
+    });
+  };
+
   const handleSend = async (text: string) => {
     if (!ready || streaming) return;
+    // Slash commands (Claude-Code-style): /help /commit /review /test /explain /custom
+    if (text.startsWith("/") && text.length > 1) {
+      const space = text.indexOf(" ");
+      const cmd = space === -1 ? text.slice(1) : text.slice(1, space);
+      const args = space === -1 ? "" : text.slice(space + 1);
+      setMessages([...messages, { role: "user" as const, content: text }, { role: "assistant" as const, content: "" }]);
+      setStreaming(true);
+      try {
+        pushAssistant(await slashRun(cmd, args, currentModel));
+      } catch (e) {
+        pushAssistant(`⚠️ ${e instanceof Error ? e.message : "Command failed"}`);
+      } finally {
+        setStreaming(false);
+        refreshUsage();
+      }
+      return;
+    }
     const next: ChatMessage[] = [...messages, { role: "user" as const, content: text }];
     setMessages([...next, { role: "assistant" as const, content: "" }]);
     setStreaming(true);
@@ -92,20 +117,10 @@ export default function App() {
     try {
       await streamChat(currentModel, next, (token) => {
         acc += token;
-        const snapshot = acc;
-        setMessages((prev) => {
-          const copy = [...prev];
-          copy[copy.length - 1] = { role: "assistant", content: snapshot };
-          return copy;
-        });
+        pushAssistant(acc);
       });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Request failed";
-      setMessages((prev) => {
-        const copy = [...prev];
-        copy[copy.length - 1] = { role: "assistant", content: `⚠️ ${msg}` };
-        return copy;
-      });
+      pushAssistant(`⚠️ ${e instanceof Error ? e.message : "Request failed"}`);
     } finally {
       setStreaming(false);
       refreshUsage();
@@ -175,7 +190,7 @@ export default function App() {
       />
       <main className="flex-1 min-w-0 h-full">
         {mode === "chat" && <Chat messages={messages} streaming={streaming} ready={ready} onSend={handleSend} />}
-        {mode === "code" && <Code />}
+        {mode === "code" && <Code model={currentModel} />}
         {mode === "agent" && <Agent model={currentModel} />}
         {mode === "manager" && <Manager model={currentModel} />}
         {mode === "build" && <Build model={currentModel} />}

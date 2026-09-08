@@ -19,17 +19,25 @@ from pydantic import BaseModel, Field
 from . import (
     __version__,
     agent,
+    aider_engine,
     builder,
     catalog,
     config,
+    contextx,
     files,
     gitops,
     llm,
     manager,
+    mcp_client,
+    profiles,
     review,
+    slash,
+    todos,
     usage,
     vault,
     voice,
+    web,
+    workflows,
 )
 
 app = FastAPI(title="AK Dev Arena", version=__version__)
@@ -41,6 +49,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+COMPOSER_PROMPT = """You output multi-file patches as EXACTLY ONE JSON object, no other text:
+{"patches": [{"path": "relative/path", "old_text": "exact snippet to replace", "new_text": "replacement"}]}
+Rules: old_text must match the file EXACTLY. For a NEW file use old_text "" (empty). Only needed files."""
 
 
 # ---------------------------------------------------------------- models ---
@@ -87,6 +99,17 @@ class AgentRequest(BaseModel):
     task: str = Field(min_length=1, max_length=20_000)
     model: str = Field(default="", max_length=200)
     max_steps: int = Field(default=8, ge=1, le=25)
+    profile: str = Field(default="coder", max_length=20)
+
+
+class PlanRequest(BaseModel):
+    task: str = Field(min_length=1, max_length=20_000)
+    model: str = Field(default="", max_length=200)
+
+
+class ApproveRequest(BaseModel):
+    tool: str = Field(min_length=1, max_length=50)
+    minutes: int = Field(default=10, ge=1, le=120)
 
 
 class JobRequest(BaseModel):
@@ -115,6 +138,73 @@ class ReviewRequest(BaseModel):
 class SpeakRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
     voice: str = Field(default="en-US-AriaNeural", max_length=100)
+
+
+class ComposerRequest(BaseModel):
+    instructions: str = Field(min_length=1, max_length=20_000)
+    model: str = Field(default="", max_length=200)
+
+
+class ComposerPatch(BaseModel):
+    path: str = Field(min_length=1, max_length=500)
+    old_text: str = Field(max_length=500_000)
+    new_text: str = Field(max_length=500_000)
+
+
+class ComposerApply(BaseModel):
+    patches: list[ComposerPatch] = Field(min_length=1, max_length=50)
+
+
+class CompleteRequest(BaseModel):
+    file: str = Field(default="", max_length=500)
+    prefix: str = Field(min_length=1, max_length=20_000)
+    suffix: str = Field(default="", max_length=20_000)
+    model: str = Field(default="", max_length=200)
+
+
+class SlashRun(BaseModel):
+    command: str = Field(min_length=1, max_length=50)
+    args: str = Field(default="", max_length=5000)
+    model: str = Field(default="", max_length=200)
+
+
+class McpCall(BaseModel):
+    server: str = Field(min_length=1, max_length=100)
+    tool: str = Field(min_length=1, max_length=200)
+    args: dict[str, Any] = Field(default_factory=dict)
+
+
+class TodoCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+    job: str = Field(default="", max_length=50)
+
+
+class TodoPatch(BaseModel):
+    done: bool = True
+
+
+class WorkflowStep(BaseModel):
+    task: str = Field(min_length=1, max_length=2000)
+    profile: str = Field(default="coder", max_length=20)
+    max_steps: int = Field(default=6, ge=1, le=25)
+
+
+class WorkflowSave(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    steps: list[WorkflowStep] = Field(min_length=1, max_length=20)
+
+
+class WorkflowRun(BaseModel):
+    model: str = Field(default="", max_length=200)
+
+
+class WebSearchReq(BaseModel):
+    q: str = Field(min_length=1, max_length=500)
+    max_results: int = Field(default=5, ge=1, le=10)
+
+
+class WebFetchReq(BaseModel):
+    url: str = Field(min_length=10, max_length=2000)
 
 
 # --------------------------------------------------------------- helpers ---
@@ -197,12 +287,10 @@ def api_catalog_refresh() -> dict[str, Any]:
 @app.post("/api/chat")
 async def chat(body: ChatRequest) -> dict[str, Any]:
     try:
+        messages = contextx.inject_context([m.model_dump() for m in body.messages])
         result = await llm.chat_completion(
-            model=body.model,
-            messages=[m.model_dump() for m in body.messages],
-            max_tokens=body.max_tokens,
-            temperature=body.temperature,
-        )
+            model=body.model, messages=messages,
+            max_tokens=body.max_tokens, temperature=body.temperature)
     except llm.ArenaLLMError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     _record_usage(result)
@@ -211,13 +299,19 @@ async def chat(body: ChatRequest) -> dict[str, Any]:
 
 @app.post("/api/chat/stream")
 async def chat_stream(body: ChatRequest) -> StreamingResponse:
+    try:
+        messages = contextx.inject_context([m.model_dump() for m in body.messages])
+    except Exception as exc:  # noqa: BLE001 — context failure → friendly error
+        async def _err():
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(_err(), media_type="text/event-stream")
+
     async def event_generator():
         try:
             async for token in llm.chat_stream(
-                model=body.model,
-                messages=[m.model_dump() for m in body.messages],
-                max_tokens=body.max_tokens,
-                temperature=body.temperature,
+                model=body.model, messages=messages,
+                max_tokens=body.max_tokens, temperature=body.temperature,
             ):
                 yield f"data: {json.dumps({'token': token})}\n\n"
             _record_usage({"model": body.model,
@@ -310,13 +404,130 @@ def api_git_undo(body: UndoRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/api/code/repomap")
+def api_repomap(path: str = "") -> dict[str, Any]:
+    try:
+        return aider_engine.repo_map(path)
+    except files.FileError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/code/composer")
+async def api_composer(body: ComposerRequest) -> dict[str, Any]:
+    model = body.model or _default_model("code")
+    tree = contextx._tree_text(None)  # noqa: SLF001 — same package
+    try:
+        resp = await llm.chat_completion(model, [
+            {"role": "system", "content": COMPOSER_PROMPT},
+            {"role": "user", "content": f"WORKSPACE TREE:\n{tree}\n\nTASK:\n{body.instructions}"},
+        ], max_tokens=3000, temperature=0.2)
+    except llm.ArenaLLMError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    raw = resp.get("content", "")
+    try:
+        obj = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
+        patches = obj.get("patches", [])
+        if not isinstance(patches, list):
+            raise ValueError
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400,
+                            detail="The AI returned an invalid patch set — try again.") from None
+    out = []
+    for p in patches[:20]:
+        path = str(p.get("path", "")).lstrip("/")
+        old, new = str(p.get("old_text", "")), str(p.get("new_text", ""))
+        try:
+            current = files.read_file(path)["content"]
+            exists = True
+        except files.FileError:
+            current, exists = "", False
+        if not exists and not old:
+            out.append({"path": path, "diff": f"(new file {path}, {len(new)} chars)",
+                        "ok": True, "error": "", "old_text": old, "new_text": new})
+        elif not old or old not in current:
+            out.append({"path": path, "diff": "", "ok": False,
+                        "error": "old_text not found — file may have changed.",
+                        "old_text": old, "new_text": new})
+        else:
+            out.append({"path": path,
+                        "diff": files.make_diff(path, current, current.replace(old, new, 1)),
+                        "ok": True, "error": "", "old_text": old, "new_text": new})
+    return {"patches": out, "applied": False}
+
+
+@app.post("/api/code/composer/apply")
+def api_composer_apply(body: ComposerApply) -> dict[str, Any]:
+    applied, failed = [], []
+    for p in body.patches:
+        try:
+            try:
+                files.read_file(p.path)
+                exists = True
+            except files.FileError:
+                exists = False
+            if not exists and not p.old_text:
+                files.write_file(p.path, p.new_text)
+            else:
+                files.apply_edit(p.path, p.old_text, p.new_text)
+            applied.append(p.path)
+        except files.FileError as exc:
+            failed.append({"path": p.path, "error": str(exc)})
+    checkpoint = None
+    if applied:
+        try:
+            checkpoint = gitops.checkpoint("", "arena: composer apply").get("hash")
+        except gitops.GitError:
+            pass
+    return {"applied": applied, "failed": failed, "checkpoint": checkpoint}
+
+
+@app.post("/api/code/complete")
+async def api_complete(body: CompleteRequest) -> dict[str, Any]:
+    model = body.model or _default_model("chat")
+    try:
+        resp = await llm.chat_completion(model, [
+            {"role": "system", "content": "You are a code autocomplete engine. Reply with ONLY the completion text — no quotes, no backticks, no explanation."},
+            {"role": "user", "content": f"File: {body.file or 'untitled'}\n<BEFORE>\n{body.prefix[-3000:]}\n<AFTER>\n{(body.suffix or '')[:1000]}"},
+        ], max_tokens=256, temperature=0.2)
+    except llm.ArenaLLMError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"suggestion": (resp.get("content") or "").strip()}
+
+
+@app.get("/api/context/rules")
+def api_rules() -> dict[str, Any]:
+    rules = contextx.load_rules()
+    return {"rules": rules, "found": bool(rules)}
+
+
 # ---------------------------------------------------- agent mode routes ---
 
 
 @app.post("/api/agent/run")
 async def api_agent_run(body: AgentRequest) -> dict[str, Any]:
     model = body.model or _default_model("agent")
-    return await agent.run_agent(body.task, model, body.max_steps)
+    return await agent.run_agent(body.task, model, body.max_steps, profile=body.profile or "coder")
+
+
+@app.post("/api/agent/plan")
+async def api_agent_plan(body: PlanRequest) -> dict[str, Any]:
+    model = body.model or _default_model("agent")
+    return await agent.plan_task(body.task, model)
+
+
+@app.get("/api/agent/profiles")
+def api_agent_profiles() -> dict[str, Any]:
+    return {"profiles": profiles.list_profiles()}
+
+
+@app.get("/api/agent/pending")
+def api_agent_pending() -> dict[str, Any]:
+    return {"pending": agent.pending_approvals()}
+
+
+@app.post("/api/agent/approve")
+def api_agent_approve(body: ApproveRequest) -> dict[str, Any]:
+    return agent.approve_tool(body.tool, body.minutes)
 
 
 # ------------------------------------------------------ manager routes ---
@@ -324,7 +535,6 @@ async def api_agent_run(body: AgentRequest) -> dict[str, Any]:
 
 @app.post("/api/jobs")
 async def api_job_create(body: JobRequest) -> dict[str, Any]:
-    # async so background job tasks attach to the running event loop
     model = body.model or _default_model("agent")
     return manager.create_job(body.task, model, body.max_steps)
 
@@ -345,6 +555,27 @@ def api_job_get(job_id: str) -> dict[str, Any]:
 @app.delete("/api/jobs/{job_id}")
 def api_job_cancel(job_id: str) -> dict[str, Any]:
     return {"cancelled": manager.cancel_job(job_id), "id": job_id}
+
+
+@app.get("/api/jobs/{job_id}/artifacts")
+def api_job_artifacts(job_id: str) -> dict[str, Any]:
+    if not manager.get_job(job_id):
+        raise HTTPException(status_code=404, detail="Job not found.")
+    try:
+        base = manager.job_dir(job_id)
+        out = []
+        for p in sorted(base.rglob("*")):
+            if len(out) >= 200:
+                break
+            if p.is_file():
+                try:
+                    out.append({"path": p.relative_to(base).as_posix(),
+                                "size": p.stat().st_size})
+                except OSError:
+                    continue
+        return {"id": job_id, "artifacts": out}
+    except Exception as exc:  # noqa: BLE001 — FS failure → friendly error
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # -------------------------------------------------------- build routes ---
@@ -426,3 +657,128 @@ def api_usage() -> dict[str, Any]:
 def api_usage_reset() -> dict[str, Any]:
     usage.reset()
     return {"reset": True}
+
+
+# -------------------------------------------------------- slash routes ---
+
+
+@app.get("/api/slash/list")
+def api_slash_list() -> dict[str, Any]:
+    return {"commands": slash.list_commands()}
+
+
+@app.post("/api/slash/run")
+async def api_slash_run(body: SlashRun) -> dict[str, Any]:
+    model = body.model or _default_model("chat")
+    try:
+        return await slash.run_slash(body.command, body.args, model)
+    except llm.ArenaLLMError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------- mcp routes ---
+
+
+@app.get("/api/mcp/status")
+async def api_mcp_status() -> dict[str, Any]:
+    return await mcp_client.status()
+
+
+@app.post("/api/mcp/call")
+async def api_mcp_call(body: McpCall) -> dict[str, Any]:
+    try:
+        return {"result": await mcp_client.call_tool(body.server, body.tool, body.args)}
+    except mcp_client.McpError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# -------------------------------------------------------- todos routes ---
+
+
+@app.get("/api/todos")
+def api_todos_list() -> dict[str, Any]:
+    return {"todos": todos.list_todos()}
+
+
+@app.post("/api/todos")
+def api_todos_create(body: TodoCreate) -> dict[str, Any]:
+    try:
+        return todos.create(body.text, body.job or None)
+    except todos.TodoError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/todos/{todo_id}")
+def api_todos_patch(todo_id: str, body: TodoPatch) -> dict[str, Any]:
+    try:
+        return todos.set_done(todo_id, body.done)
+    except todos.TodoError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/api/todos/{todo_id}")
+def api_todos_delete(todo_id: str) -> dict[str, Any]:
+    return {"deleted": todos.remove(todo_id), "id": todo_id}
+
+
+@app.post("/api/todos/clear")
+def api_todos_clear() -> dict[str, Any]:
+    return {"cleared": todos.clear_done()}
+
+
+# ---------------------------------------------------- workflows routes ---
+
+
+@app.get("/api/workflows")
+def api_workflows_list() -> dict[str, Any]:
+    return {"workflows": workflows.list_workflows()}
+
+
+@app.post("/api/workflows")
+def api_workflows_save(body: WorkflowSave) -> dict[str, Any]:
+    try:
+        return workflows.save_workflow(
+            body.name, [s.model_dump() for s in body.steps])
+    except workflows.WorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/workflows/{name}")
+def api_workflows_delete(name: str) -> dict[str, Any]:
+    return {"deleted": workflows.delete_workflow(name), "name": name}
+
+
+@app.post("/api/workflows/{name}/run")
+async def api_workflows_run(name: str, body: WorkflowRun) -> dict[str, Any]:
+    model = body.model or _default_model("agent")
+    try:
+        return workflows.start_run(name, model)
+    except workflows.WorkflowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/workflows/runs/{run_id}")
+def api_workflows_get_run(run_id: str) -> dict[str, Any]:
+    run = workflows.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    return run
+
+
+# ---------------------------------------------------------- web routes ---
+
+
+@app.post("/api/web/search")
+def api_web_search(body: WebSearchReq) -> dict[str, Any]:
+    try:
+        return {"results": web.web_search(body.q, body.max_results)}
+    except web.WebError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/web/fetch")
+def api_web_fetch(body: WebFetchReq) -> dict[str, Any]:
+    try:
+        return web.web_fetch(body.url)
+    except web.WebError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

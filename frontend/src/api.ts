@@ -247,8 +247,13 @@ export async function gitUndo(): Promise<{ undone: boolean; reverted: string }> 
 
 /* ---------------------------------- agent ---------------------------------- */
 
-export async function runAgent(task: string, model: string, max_steps: number): Promise<AgentResult> {
-  return post("/api/agent/run", { task, model, max_steps });
+export async function runAgent(
+  task: string,
+  model: string,
+  max_steps: number,
+  profile = "coder"
+): Promise<AgentResult> {
+  return post("/api/agent/run", { task, model, max_steps, profile });
 }
 
 /* ---------------------------------- jobs ----------------------------------- */
@@ -329,4 +334,184 @@ export async function getUsage(): Promise<UsageSummary> {
 
 export async function resetUsage(): Promise<void> {
   await asJson(await fetch("/api/usage", { method: "DELETE" }));
+}
+
+/* ------------------------------ mixing (v1.2) ------------------------------ */
+
+export interface Profile {
+  id: string;
+  name: string;
+  description: string;
+  tools: string[];
+}
+
+export interface Todo {
+  id: string;
+  text: string;
+  done: boolean;
+  job: string | null;
+}
+
+export interface WorkflowStepInput {
+  task: string;
+  profile?: string;
+  max_steps?: number;
+}
+
+export interface Workflow {
+  name: string;
+  steps: WorkflowStepInput[];
+  created: number;
+}
+
+export interface WorkflowRunInfo {
+  id: string;
+  workflow: string;
+  status: string;
+  current: number;
+  total: number;
+  results: { task: string; status: string; summary: string }[];
+  error: string;
+}
+
+export interface SlashCmd {
+  name: string;
+  description: string;
+  builtin: boolean;
+}
+
+export interface ComposerPatchView {
+  path: string;
+  diff: string;
+  ok: boolean;
+  error: string;
+  old_text?: string;
+  new_text?: string;
+}
+
+export async function repomap(path = ""): Promise<{ map: string; engine: string }> {
+  return asJson(await fetch(`/api/code/repomap?path=${encodeURIComponent(path)}`));
+}
+
+export async function composerPreview(instructions: string, model: string): Promise<ComposerPatchView[]> {
+  const res = await post("/api/code/composer", { instructions, model });
+  return (res.patches ?? []) as ComposerPatchView[];
+}
+
+export async function composerApply(
+  patches: { path: string; old_text: string; new_text: string }[]
+): Promise<any> {
+  return post("/api/code/composer/apply", { patches });
+}
+
+export async function completeCode(file: string, prefix: string, suffix: string, model: string): Promise<string> {
+  const res = await post("/api/code/complete", { file, prefix, suffix, model });
+  return (res.suggestion ?? "") as string;
+}
+
+export async function getRules(): Promise<{ rules: string; found: boolean }> {
+  return asJson(await fetch("/api/context/rules"));
+}
+
+export async function getProfiles(): Promise<Profile[]> {
+  const res = await fetch("/api/agent/profiles");
+  return ((await asJson(res)).profiles ?? []) as Profile[];
+}
+
+export async function planTask(task: string, model: string): Promise<{ plan: string[] }> {
+  return post("/api/agent/plan", { task, model });
+}
+
+export async function getPending(): Promise<{ tool: string }[]> {
+  const res = await fetch("/api/agent/pending");
+  return ((await asJson(res)).pending ?? []) as { tool: string }[];
+}
+
+export async function approveTool(tool: string): Promise<void> {
+  await post("/api/agent/approve", { tool });
+}
+
+export async function slashList(): Promise<SlashCmd[]> {
+  const res = await fetch("/api/slash/list");
+  return ((await asJson(res)).commands ?? []) as SlashCmd[];
+}
+
+export async function slashRun(command: string, args: string, model: string): Promise<string> {
+  const res = await post("/api/slash/run", { command, args, model });
+  return (res.output ?? "") as string;
+}
+
+export async function mcpStatus(): Promise<{
+  installed: boolean;
+  servers: { id: string; ok: boolean; tools?: string[]; error?: string }[];
+  hint?: string;
+}> {
+  return asJson(await fetch("/api/mcp/status"));
+}
+
+export async function mcpCall(server: string, tool: string, args: Record<string, unknown>): Promise<string> {
+  const res = await post("/api/mcp/call", { server, tool, args });
+  return (res.result ?? "") as string;
+}
+
+export async function listTodos(): Promise<Todo[]> {
+  const res = await fetch("/api/todos");
+  return ((await asJson(res)).todos ?? []) as Todo[];
+}
+
+export async function createTodo(text: string): Promise<Todo> {
+  return post("/api/todos", { text });
+}
+
+export async function patchTodo(id: string, done: boolean): Promise<void> {
+  await asJson(
+    await fetch(`/api/todos/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ done }),
+    })
+  );
+}
+
+export async function deleteTodo(id: string): Promise<void> {
+  await asJson(await fetch(`/api/todos/${id}`, { method: "DELETE" }));
+}
+
+export async function clearTodos(): Promise<void> {
+  await post("/api/todos/clear", {});
+}
+
+export async function listWorkflows(): Promise<Workflow[]> {
+  const res = await fetch("/api/workflows");
+  return ((await asJson(res)).workflows ?? []) as Workflow[];
+}
+
+export async function saveWorkflow(name: string, steps: WorkflowStepInput[]): Promise<void> {
+  await post("/api/workflows", { name, steps });
+}
+
+export async function deleteWorkflow(name: string): Promise<void> {
+  await asJson(await fetch(`/api/workflows/${name}`, { method: "DELETE" }));
+}
+
+export async function runWorkflow(name: string, model: string): Promise<WorkflowRunInfo> {
+  return post(`/api/workflows/${name}/run`, { model });
+}
+
+export async function getWorkflowRun(id: string): Promise<WorkflowRunInfo> {
+  return asJson(await fetch(`/api/workflows/runs/${id}`));
+}
+
+export async function webSearch(q: string): Promise<{ title: string; url: string; snippet: string }[]> {
+  const res = await post("/api/web/search", { q });
+  return (res.results ?? []) as { title: string; url: string; snippet: string }[];
+}
+
+export async function webFetch(url: string): Promise<{ title: string; url: string; text: string }> {
+  return post("/api/web/fetch", { url });
+}
+
+export async function jobArtifacts(id: string): Promise<{ path: string; size: number }[]> {
+  const res = await fetch(`/api/jobs/${id}/artifacts`);
+  return ((await asJson(res)).artifacts ?? []) as { path: string; size: number }[];
 }

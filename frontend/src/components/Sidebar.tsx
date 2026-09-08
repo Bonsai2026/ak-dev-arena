@@ -108,7 +108,7 @@ export default function Sidebar({
     <aside className="w-72 shrink-0 h-full flex flex-col bg-zinc-950 border-r border-zinc-800">
       <div className="px-5 pt-5 pb-4">
         <div className="text-xl font-extrabold tracking-tight">🏟️ AK Dev Arena</div>
-        <div className="text-xs text-zinc-500 mt-0.5">v1.1.0 · {providers.length} providers</div>
+        <div className="text-xs text-zinc-500 mt-0.5">v1.2.0 · {providers.length} providers</div>
       </div>
 
       <div className="px-3">

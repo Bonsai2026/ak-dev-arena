@@ -4,7 +4,7 @@
 #           (stored in config.local.yaml which is git-ignored).
 # =====================================================================
 app_name: "AK Dev Arena"
-version: "1.1.0"
+version: "1.2.0"
 
 server:
   host: "127.0.0.1"
@@ -27,3 +27,27 @@ providers:
   groq:      { timeout: 120 }
   ollama:    { base_url: "http://localhost:11434", timeout: 300 }
   openrouter: { timeout: 180 }
+
+# Agent permissions (OpenCode-style): allow | ask | deny per tool.
+permissions:
+  list_files: allow
+  read_file: allow
+  write_file: allow
+  search: allow
+  run: allow
+  web_search: allow
+  web_fetch: allow
+  todo: allow
+  mcp: ask
+
+# Agent hooks (Claude-Code-style shell commands; env: ARENA_TOOL, ARENA_ARGS).
+hooks:
+  pre_tool: ""
+  post_tool: ""
+
+# MCP servers (Anthropic Model Context Protocol). Example:
+# mcp_servers:
+#   - id: memory
+#     command: npx
+#     args: ["-y", "@modelcontextprotocol/server-memory"]
+mcp_servers: []
