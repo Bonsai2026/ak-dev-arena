@@ -1,8 +1,9 @@
-"""Arena LLM router — one interface for every provider (via LiteLLM).
+"""Arena LLM router — one interface for 200+ providers (via LiteLLM).
 
-Any LiteLLM model id works out of the box. The MODEL_CATALOG below is just a
-curated picker for the UI; power users can type any id (e.g. a new model that
-launched yesterday) and it will work as long as the provider key is set.
+Model ids look like OpenCode's: "provider/model" (e.g. "ofox/bailian/qwen3.7-max",
+"openai/gpt-5-nano", "ollama/llama3.1"). Bare legacy ids ("gpt-4o-mini") still work.
+Any provider in the catalog works the moment its API key is added — models are
+auto-detected from the models.dev registry, free ones flagged automatically.
 """
 
 from __future__ import annotations
@@ -11,31 +12,18 @@ from typing import Any, AsyncIterator
 
 import litellm
 
-from . import vault
+from . import catalog, vault
 
 # litellm can be chatty; keep server logs clean
 litellm.suppress_debug_info = True
 
-MODEL_CATALOG: list[dict[str, Any]] = [
-    {"id": "gpt-5.5", "label": "GPT-5.5", "provider": "openai",
-     "best_for": "All-round coding + agents", "needs_key": True},
-    {"id": "gpt-4o", "label": "GPT-4o", "provider": "openai",
-     "best_for": "Fast + capable chat", "needs_key": True},
-    {"id": "gpt-4o-mini", "label": "GPT-4o mini", "provider": "openai",
+# Minimal fallback if the catalog snapshot is missing entirely.
+FALLBACK_CATALOG: list[dict[str, Any]] = [
+    {"id": "openai/gpt-4o-mini", "label": "GPT-4o mini", "provider": "openai",
      "best_for": "Cheapest OpenAI chat", "needs_key": True},
-    {"id": "claude-opus-4-8", "label": "Claude Opus 4.8", "provider": "anthropic",
-     "best_for": "Deepest reasoning + long tasks", "needs_key": True},
-    {"id": "gemini/gemini-3-pro", "label": "Gemini 3 Pro", "provider": "gemini",
-     "best_for": "Huge context window", "needs_key": True},
-    {"id": "deepseek/deepseek-chat", "label": "DeepSeek", "provider": "deepseek",
-     "best_for": "Cheap + strong coding", "needs_key": True},
-    {"id": "groq/llama-3.3-70b-versatile", "label": "Groq Llama 70B", "provider": "groq",
-     "best_for": "Ultra-fast responses", "needs_key": True},
     {"id": "ollama/llama3.1", "label": "Ollama Llama 3.1 (local)", "provider": "ollama",
      "best_for": "100% free + offline", "needs_key": False},
 ]
-
-_CATALOG_INDEX = {m["id"]: m for m in MODEL_CATALOG}
 
 
 class ArenaLLMError(Exception):
@@ -43,14 +31,11 @@ class ArenaLLMError(Exception):
 
 
 def provider_for_model(model_id: str) -> str:
-    """Resolve provider from catalog, else from `provider/model` prefix."""
-    if model_id in _CATALOG_INDEX:
-        return _CATALOG_INDEX[model_id]["provider"]
-    if "/" in model_id:
-        prefix = model_id.split("/", 1)[0].lower()
-        if prefix in vault.PROVIDER_ENV_VARS:
-            return prefix
-    lowered = model_id.lower()
+    """Resolve provider: "provider/..." → provider; bare id → legacy inference."""
+    mid = (model_id or "").strip()
+    if "/" in mid:
+        return mid.split("/", 1)[0].lower()
+    lowered = mid.lower()
     if lowered.startswith(("gpt-", "o1", "o3", "o4")):
         return "openai"
     if lowered.startswith("claude"):
@@ -59,18 +44,34 @@ def provider_for_model(model_id: str) -> str:
         return "gemini"
     if lowered.startswith("deepseek"):
         return "deepseek"
+    if lowered.startswith(("llama", "qwen", "mistral", "mixtral", "codellama", "gemma")):
+        return "ollama"
     return "openai"  # LiteLLM default
 
 
 def _ensure_key(provider: str) -> None:
-    if provider == "ollama":
+    if not vault.needs_key(provider):
         return
     if not vault.is_configured(provider):
-        env_var = vault.PROVIDER_ENV_VARS.get(provider, "API_KEY")
+        env_var = vault.env_var_for(provider) or "API_KEY"
         raise ArenaLLMError(
             f"No API key for '{provider}'. Add it via the Keys panel in the app "
             f"or set the {env_var} environment variable."
         )
+
+
+def _call_kwargs(model: str, provider: str, messages: list[dict[str, str]],
+                 max_tokens: int, temperature: float) -> dict[str, Any]:
+    resolved = catalog.resolve_call(model, provider)
+    kwargs: dict[str, Any] = {"model": resolved["litellm_model"], "messages": messages,
+                              "max_tokens": max_tokens, "temperature": temperature}
+    if vault.needs_key(provider):
+        kwargs["api_key"] = vault.get_key(provider)
+    if resolved["api_base"]:
+        kwargs["api_base"] = resolved["api_base"]
+    if provider == "ollama" and "api_base" not in kwargs:
+        kwargs["api_base"] = catalog.OLLAMA_BASE
+    return kwargs
 
 
 def _friendly_error(exc: Exception, provider: str) -> ArenaLLMError:
@@ -101,11 +102,7 @@ async def chat_completion(
     _ensure_key(provider)
     try:
         resp = await litellm.acompletion(
-            model=model,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+            **_call_kwargs(model, provider, messages, max_tokens, temperature))
     except ArenaLLMError:
         raise
     except Exception as exc:  # noqa: BLE001 — converted to friendly error
@@ -135,12 +132,7 @@ async def chat_stream(
     _ensure_key(provider)
     try:
         resp = await litellm.acompletion(
-            model=model,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            stream=True,
-        )
+            **_call_kwargs(model, provider, messages, max_tokens, temperature), stream=True)
         async for chunk in resp:
             delta = chunk.choices[0].delta.content if chunk.choices else None
             if delta:

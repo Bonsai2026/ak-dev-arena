@@ -4,11 +4,11 @@
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![CI](https://github.com/Bonsai2026/ak-dev-arena/actions/workflows/ci.yml/badge.svg)](https://github.com/Bonsai2026/ak-dev-arena/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.0.0-brightgreen.svg)](config.yaml)
+[![Version](https://img.shields.io/badge/version-1.1.0-brightgreen.svg)](config.yaml)
 [![Stack](https://img.shields.io/badge/stack-Tauri%20%2B%20React%20%2B%20FastAPI%20%2B%20LiteLLM-green.svg)](docs/ARCHITECTURE.md)
 [![Tests](https://img.shields.io/badge/tests-38%20passing-brightgreen.svg)](backend/tests)
 
-Bring **any API key** (OpenAI, Anthropic, Gemini, DeepSeek, Groq) or run **100% local & free** with Ollama. No lock-in. No ads. No subscriptions. Ever.
+Bring **any API key** — **215+ providers, 7,500+ models** via the open [models.dev](https://models.dev) registry (same formula OpenCode uses). Add one key → all its models auto-detect. **1,000+ models are FREE** 🆓 — or run **100% local** with Ollama. No lock-in. No ads. No subscriptions. Ever.
 
 ---
 

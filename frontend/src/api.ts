@@ -9,16 +9,32 @@ export interface ModelEntry {
   id: string;
   label: string;
   provider: string;
-  best_for: string;
+  provider_name?: string;
+  best_for?: string;
   needs_key: boolean;
   configured: boolean;
+  cost?: { input: number; output: number };
+  free?: boolean;
+  tool_call?: boolean;
+  reasoning?: boolean;
+  context?: number;
 }
 
 export interface ProviderEntry {
   provider: string;
+  name?: string;
   env_var: string | null;
   needs_key: boolean;
   configured: boolean;
+  models?: number;
+  free_models?: number;
+}
+
+export interface ModelQuery {
+  provider?: string;
+  search?: string;
+  free_only?: boolean;
+  limit?: number;
 }
 
 export interface FileEntry {
@@ -113,8 +129,23 @@ async function post(path: string, body: unknown): Promise<any> {
 
 /* ------------------------------- catalog/keys ------------------------------ */
 
-export async function getModels(): Promise<{ models: ModelEntry[]; defaults: Record<string, string> }> {
-  return asJson(await fetch("/api/models"));
+export async function getModels(q: ModelQuery = {}): Promise<{
+  models: ModelEntry[];
+  defaults: Record<string, string>;
+  total: number;
+  catalog_total: number;
+}> {
+  const params = new URLSearchParams();
+  if (q.provider) params.set("provider", q.provider);
+  if (q.search) params.set("search", q.search);
+  if (q.free_only) params.set("free_only", "true");
+  params.set("limit", String(q.limit ?? 500));
+  return asJson(await fetch(`/api/models?${params.toString()}`));
+}
+
+export async function refreshCatalog(): Promise<{ providers: number; models: number; fetched_at: string }> {
+  const res = await fetch("/api/catalog/refresh", { method: "POST" });
+  return asJson(res);
 }
 
 export async function getProviders(): Promise<{ providers: ProviderEntry[] }> {

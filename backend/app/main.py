@@ -20,6 +20,7 @@ from . import (
     __version__,
     agent,
     builder,
+    catalog,
     config,
     files,
     gitops,
@@ -148,14 +149,19 @@ def get_public_config() -> dict[str, Any]:
 
 
 @app.get("/api/models")
-def list_models(free_only: bool = False) -> dict[str, Any]:
+def list_models(provider: str = "", search: str = "", free_only: bool = False,
+                limit: int = 500) -> dict[str, Any]:
     cfg = config.get_config()
-    models = []
-    for entry in llm.MODEL_CATALOG:
-        if free_only and entry.get("needs_key"):
-            continue
-        models.append({**entry, "configured": vault.is_configured(entry["provider"])})
-    return {"models": models, "defaults": cfg.default_models}
+    entries = catalog.models(provider=provider, search=search, free_only=free_only,
+                             limit=max(1, min(limit, 2000)))
+    if not entries and not provider and not search and not free_only:
+        entries = [{**m, "free": False, "tool_call": True, "reasoning": False,
+                    "context": 0} for m in llm.FALLBACK_CATALOG]
+    for entry in entries:
+        entry["configured"] = vault.is_configured(entry["provider"])
+    total_all = sum(p.get("model_count", 0) for p in catalog.providers())
+    return {"models": entries, "defaults": cfg.default_models, "total": len(entries),
+            "catalog_total": total_all}
 
 
 @app.get("/api/providers")
@@ -175,6 +181,14 @@ def save_key(body: KeyRequest) -> dict[str, Any]:
 @app.delete("/api/keys/{provider}")
 def remove_key(provider: str) -> dict[str, Any]:
     return {"deleted": vault.delete_key(provider), "provider": provider.lower()}
+
+
+@app.post("/api/catalog/refresh")
+def api_catalog_refresh() -> dict[str, Any]:
+    try:
+        return catalog.refresh()
+    except catalog.CatalogError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------- chat routes ---

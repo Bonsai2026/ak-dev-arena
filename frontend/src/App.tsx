@@ -9,7 +9,7 @@ import Review from "./components/Review";
 import Voice from "./components/Voice";
 import Palette, { type PaletteAction } from "./components/Palette";
 import { getModels, getProviders, getUsage, streamChat } from "./api";
-import type { ChatMessage, ModelEntry, ProviderEntry, UsageSummary } from "./api";
+import type { ChatMessage, ModelEntry, ModelQuery, ProviderEntry, UsageSummary } from "./api";
 
 const MODES: ModeDef[] = [
   { key: "chat", icon: "💬", name: "Chat", ready: true, hint: "" },
@@ -24,6 +24,8 @@ const MODES: ModeDef[] = [
 export default function App() {
   const [mode, setMode] = useState("chat");
   const [models, setModels] = useState<ModelEntry[]>([]);
+  const [catalogTotal, setCatalogTotal] = useState(0);
+  const [modelQuery, setModelQuery] = useState<ModelQuery>({ limit: 500 });
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [currentModel, setCurrentModel] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -34,15 +36,24 @@ export default function App() {
 
   const refreshCatalog = useCallback(async () => {
     try {
-      const [{ models: ms, defaults }, { providers: ps }] = await Promise.all([getModels(), getProviders()]);
+      const [{ models: ms, defaults, catalog_total }, { providers: ps }] = await Promise.all([
+        getModels(modelQuery),
+        getProviders(),
+      ]);
       setModels(ms);
+      setCatalogTotal(catalog_total ?? ms.length);
       setProviders(ps);
       setBackendUp(true);
-      setCurrentModel((cur) => cur || defaults.chat || ms[0]?.id || "");
+      setCurrentModel((cur) => {
+        if (cur && ms.some((m) => m.id === cur)) return cur;
+        return defaults.chat && ms.some((m) => m.id === defaults.chat)
+          ? defaults.chat
+          : (ms.find((m) => m.configured)?.id ?? ms[0]?.id ?? "");
+      });
     } catch {
       setBackendUp(false);
     }
-  }, []);
+  }, [modelQuery]);
 
   const refreshUsage = useCallback(async () => {
     try {
@@ -149,6 +160,9 @@ export default function App() {
         activeMode={mode}
         onModeChange={setMode}
         models={models}
+        catalogTotal={catalogTotal}
+        modelQuery={modelQuery}
+        onQueryChange={setModelQuery}
         currentModel={currentModel}
         onModelChange={setCurrentModel}
         providers={providers}
