@@ -4,7 +4,7 @@
 #           (stored in config.local.yaml which is git-ignored).
 # =====================================================================
 app_name: "AK Dev Arena"
-version: "0.1.0"
+version: "1.0.0"
 
 server:
   host: "127.0.0.1"

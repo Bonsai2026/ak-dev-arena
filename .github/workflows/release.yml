@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    name: Build + GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Backend tests
+        run: |
+          pip install -r backend/requirements.txt
+          pytest backend/tests -q
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Frontend build
+        run: |
+          npm install --prefix frontend
+          npm run build --prefix frontend
+
+      - name: Package frontend
+        run: tar -czf ak-dev-arena-frontend-${{ github.ref_name }}.tar.gz -C frontend dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ak-dev-arena-frontend-*.tar.gz
+          generate_release_notes: true
+          body: |
+            🏟️ **AK Dev Arena ${{ github.ref_name }}** — Full & Final
+            7 modes: Chat · Code · Agent · Manager · Build · Review · Voice
+            See README for the 2-minute quickstart.

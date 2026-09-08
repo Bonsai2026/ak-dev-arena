@@ -1,25 +1,40 @@
 import { useState } from "react";
-import type { ModelEntry, ProviderEntry } from "../api";
-import { saveKey, deleteKey } from "../api";
+import type { ModelEntry, ProviderEntry, UsageSummary } from "../api";
+import { deleteKey, saveKey } from "../api";
+
+export interface ModeDef {
+  key: string;
+  icon: string;
+  name: string;
+  ready: boolean;
+  hint: string;
+}
 
 interface Props {
+  modes: ModeDef[];
+  activeMode: string;
+  onModeChange: (key: string) => void;
   models: ModelEntry[];
   currentModel: string;
   onModelChange: (id: string) => void;
   providers: ProviderEntry[];
   onKeysChanged: () => void;
+  usage: UsageSummary | null;
+  onPalette: () => void;
 }
 
-const MODES = [
-  { icon: "💬", name: "Chat", active: true, hint: "Phase 0" },
-  { icon: "⌨️", name: "Code", active: false, hint: "Phase 1" },
-  { icon: "🤖", name: "Agent", active: false, hint: "Phase 2" },
-  { icon: "👁️", name: "Manager", active: false, hint: "Phase 3" },
-  { icon: "🏗️", name: "Build", active: false, hint: "Phase 4" },
-  { icon: "🎙️", name: "Voice", active: false, hint: "Phase 6" },
-];
-
-export default function Sidebar({ models, currentModel, onModelChange, providers, onKeysChanged }: Props) {
+export default function Sidebar({
+  modes,
+  activeMode,
+  onModeChange,
+  models,
+  currentModel,
+  onModelChange,
+  providers,
+  onKeysChanged,
+  usage,
+  onPalette,
+}: Props) {
   const [keysOpen, setKeysOpen] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
@@ -57,31 +72,43 @@ export default function Sidebar({ models, currentModel, onModelChange, providers
     <aside className="w-72 shrink-0 h-full flex flex-col bg-zinc-950 border-r border-zinc-800">
       <div className="px-5 pt-5 pb-4">
         <div className="text-xl font-extrabold tracking-tight">🏟️ AK Dev Arena</div>
-        <div className="text-xs text-zinc-500 mt-0.5">v0.1.0 · Phase 0 — Foundation</div>
+        <div className="text-xs text-zinc-500 mt-0.5">v1.0.0 · Full & Final</div>
       </div>
 
       <div className="px-3">
         <div className="text-[11px] uppercase tracking-widest text-zinc-500 px-2 mb-1">Modes</div>
-        {MODES.map((m) => (
-          <div
-            key={m.name}
-            className={`flex items-center gap-3 px-3 py-2 rounded-lg text-[15px] ${
-              m.active ? "bg-zinc-900 text-white font-semibold" : "text-zinc-500 cursor-not-allowed"
+        {modes.map((m) => (
+          <button
+            key={m.key}
+            onClick={() => m.ready && onModeChange(m.key)}
+            disabled={!m.ready}
+            title={m.ready ? m.name : `Coming ${m.hint}`}
+            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[15px] ${
+              m.key === activeMode
+                ? "bg-indigo-600/25 text-white font-semibold border border-indigo-700"
+                : m.ready
+                  ? "text-zinc-300 hover:bg-zinc-900"
+                  : "text-zinc-600 cursor-not-allowed"
             }`}
-            title={m.active ? "Current mode" : `Coming in ${m.hint}`}
           >
             <span className="text-lg">{m.icon}</span>
-            <span className="flex-1">{m.name}</span>
-            {!m.active && (
+            <span className="flex-1 text-left">{m.name}</span>
+            {!m.ready && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-500">
                 {m.hint}
               </span>
             )}
-          </div>
+          </button>
         ))}
+        <button
+          onClick={onPalette}
+          className="w-full mt-2 px-3 py-2 rounded-lg text-sm text-zinc-500 hover:bg-zinc-900 border border-dashed border-zinc-800"
+        >
+          ⌘K Commands…
+        </button>
       </div>
 
-      <div className="px-5 mt-5">
+      <div className="px-5 mt-4">
         <div className="text-[11px] uppercase tracking-widest text-zinc-500 mb-1">Model</div>
         <select
           value={currentModel}
@@ -98,6 +125,12 @@ export default function Sidebar({ models, currentModel, onModelChange, providers
 
       <div className="flex-1" />
 
+      {usage && (
+        <div className="px-5 pb-2 text-[11px] text-zinc-600">
+          📊 {usage.totals.calls} calls · {(usage.totals.total / 1000).toFixed(1)}k tokens
+        </div>
+      )}
+
       <div className="p-4 border-t border-zinc-800">
         <button
           onClick={() => setKeysOpen((v) => !v)}
@@ -107,7 +140,7 @@ export default function Sidebar({ models, currentModel, onModelChange, providers
         </button>
 
         {keysOpen && (
-          <div className="mt-3 space-y-3 max-h-72 overflow-y-auto">
+          <div className="mt-3 space-y-3 max-h-64 overflow-y-auto">
             {error && <div className="text-xs text-red-400 bg-red-950/40 border border-red-900 rounded p-2">{error}</div>}
             {providers.map((p) => (
               <div key={p.provider} className="rounded-lg bg-zinc-900 border border-zinc-800 p-3">

@@ -39,3 +39,7 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Arena workspace (user playground) — keep README, ignore the rest
+workspace/*
+!workspace/README.md

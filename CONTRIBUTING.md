@@ -26,4 +26,4 @@ cd frontend && npm install
 - **Security:** NEVER log or commit API keys. Keys live in env vars or `config.local.yaml` (git-ignored) only.
 
 ## Roadmap
-Pick an issue from the [Phase plan](docs/ROADMAP.md). Phase 0 ✅ · Next: Phase 1 (Code Mode).
+Pick an issue from the [Phase plan](docs/ROADMAP.md). v1.0 ✅ · All 7 modes working. See post-1.0 ideas in ROADMAP.

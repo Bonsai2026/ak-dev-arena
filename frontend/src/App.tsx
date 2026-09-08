@@ -1,16 +1,36 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Sidebar from "./components/Sidebar";
+import Sidebar, { type ModeDef } from "./components/Sidebar";
 import Chat from "./components/Chat";
-import { getModels, getProviders, streamChat } from "./api";
-import type { ChatMessage, ModelEntry, ProviderEntry } from "./api";
+import Code from "./components/Code";
+import Agent from "./components/Agent";
+import Manager from "./components/Manager";
+import Build from "./components/Build";
+import Review from "./components/Review";
+import Voice from "./components/Voice";
+import Palette, { type PaletteAction } from "./components/Palette";
+import { getModels, getProviders, getUsage, streamChat } from "./api";
+import type { ChatMessage, ModelEntry, ProviderEntry, UsageSummary } from "./api";
+
+const MODES: ModeDef[] = [
+  { key: "chat", icon: "💬", name: "Chat", ready: true, hint: "" },
+  { key: "code", icon: "⌨️", name: "Code", ready: true, hint: "" },
+  { key: "agent", icon: "🤖", name: "Agent", ready: true, hint: "" },
+  { key: "manager", icon: "👁️", name: "Manager", ready: true, hint: "" },
+  { key: "build", icon: "🏗️", name: "Build", ready: true, hint: "" },
+  { key: "review", icon: "🔍", name: "Review", ready: true, hint: "" },
+  { key: "voice", icon: "🎙️", name: "Voice", ready: true, hint: "" },
+];
 
 export default function App() {
+  const [mode, setMode] = useState("chat");
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [currentModel, setCurrentModel] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [backendUp, setBackendUp] = useState<boolean | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [usage, setUsage] = useState<UsageSummary | null>(null);
 
   const refreshCatalog = useCallback(async () => {
     try {
@@ -24,9 +44,30 @@ export default function App() {
     }
   }, []);
 
+  const refreshUsage = useCallback(async () => {
+    try {
+      setUsage(await getUsage());
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   useEffect(() => {
     refreshCatalog();
-  }, [refreshCatalog]);
+    refreshUsage();
+  }, [refreshCatalog, refreshUsage]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+      if (e.key === "Escape") setPaletteOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const activeEntry = useMemo(() => models.find((m) => m.id === currentModel), [models, currentModel]);
   const ready = backendUp === true && (activeEntry?.configured ?? false);
@@ -56,8 +97,33 @@ export default function App() {
       });
     } finally {
       setStreaming(false);
+      refreshUsage();
     }
   };
+
+  const handleTranscript = (text: string) => {
+    setMode("chat");
+    handleSend(text);
+  };
+
+  const lastAssistant = useMemo(
+    () => [...messages].reverse().find((m) => m.role === "assistant")?.content ?? "",
+    [messages]
+  );
+
+  const paletteActions: PaletteAction[] = useMemo(
+    () => [
+      ...MODES.filter((m) => m.ready).map((m) => ({
+        label: `${m.icon} Go to ${m.name}`,
+        hint: "mode",
+        run: () => setMode(m.key),
+      })),
+      { label: "🧹 Clear chat", hint: "chat", run: () => setMessages([]) },
+      { label: "🔄 Refresh models & keys", hint: "catalog", run: () => refreshCatalog() },
+      { label: "📊 Refresh usage", hint: "usage", run: () => refreshUsage() },
+    ],
+    [refreshCatalog, refreshUsage]
+  );
 
   if (backendUp === false) {
     return (
@@ -79,15 +145,30 @@ export default function App() {
   return (
     <div className="h-full flex">
       <Sidebar
+        modes={MODES}
+        activeMode={mode}
+        onModeChange={setMode}
         models={models}
         currentModel={currentModel}
         onModelChange={setCurrentModel}
         providers={providers}
-        onKeysChanged={refreshCatalog}
+        onKeysChanged={() => {
+          refreshCatalog();
+          refreshUsage();
+        }}
+        usage={usage}
+        onPalette={() => setPaletteOpen(true)}
       />
       <main className="flex-1 min-w-0 h-full">
-        <Chat messages={messages} streaming={streaming} ready={ready} onSend={handleSend} />
+        {mode === "chat" && <Chat messages={messages} streaming={streaming} ready={ready} onSend={handleSend} />}
+        {mode === "code" && <Code />}
+        {mode === "agent" && <Agent model={currentModel} />}
+        {mode === "manager" && <Manager model={currentModel} />}
+        {mode === "build" && <Build model={currentModel} />}
+        {mode === "review" && <Review model={currentModel} />}
+        {mode === "voice" && <Voice onTranscript={handleTranscript} lastAssistant={lastAssistant} />}
       </main>
+      <Palette open={paletteOpen} actions={paletteActions} onClose={() => setPaletteOpen(false)} />
     </div>
   );
 }
