@@ -7,3 +7,4 @@ mcp>=1.0              # Anthropic Model Context Protocol client
 ddgs>=9.0             # free web search (no API key)
 faster-whisper>=1.0   # local speech-to-text (Voice Mode)
 edge-tts>=6.0         # free text-to-speech (Voice Mode)
+playwright>=1.40      # real browser inspection (preview verification)

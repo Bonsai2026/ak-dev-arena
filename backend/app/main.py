@@ -32,10 +32,12 @@ from . import (
     __version__,
     agent,
     aider_engine,
+    browser,
     builder,
     catalog,
     config,
     contextx,
+    execjobs,
     files,
     gitops,
     llm,
@@ -50,6 +52,7 @@ from . import (
     voice,
     web,
     workflows,
+    workspacex,
 )
 
 app = FastAPI(title="AK Dev Studio", version=__version__)
@@ -239,6 +242,23 @@ class WebSearchReq(BaseModel):
 
 class WebFetchReq(BaseModel):
     url: str = Field(min_length=10, max_length=2000)
+
+
+class RunReq(BaseModel):
+    action: Literal["install", "build", "test", "serve"] = "build"
+    path: str = Field(default="", max_length=500)
+    port: int | None = Field(default=None, ge=1024, le=65535)
+    timeout: int = Field(default=600, ge=10, le=3600)
+
+
+class CleanupReq(BaseModel):
+    max_age_hours: int = Field(default=24, ge=1, le=720)
+    max_bytes: int = Field(default=200 * 1024 * 1024, ge=0, le=10**11)
+
+
+class BrowserInspectReq(BaseModel):
+    url: str = Field(min_length=10, max_length=2000)
+    actions: list[dict[str, Any]] = Field(default_factory=list, max_length=10)
 
 
 # --------------------------------------------------------------- helpers ---
@@ -900,6 +920,66 @@ def api_workflows_get_run(run_id: str) -> dict[str, Any]:
     if not run:
         raise HTTPException(status_code=404, detail="Run not found.")
     return run
+
+
+# ----------------------------------------------------- workspace routes ---
+
+
+@app.get("/api/workspace")
+def api_workspace() -> dict[str, Any]:
+    return {"layout": workspacex.ensure(), "usage": workspacex.usage()}
+
+
+@app.post("/api/workspace/cleanup")
+def api_workspace_cleanup(body: CleanupReq) -> dict[str, Any]:
+    result = workspacex.cleanup(body.max_age_hours, body.max_bytes)
+    log.info("workspace cleanup removed=%s files=%s bytes", result["removed_files"], result["removed_bytes"])
+    return result
+
+
+# ------------------------------------------------------ run/build routes ---
+
+
+@app.post("/api/run")
+async def api_run(body: RunReq) -> dict[str, Any]:
+    try:
+        job = execjobs.start(body.action, body.path, port=body.port, timeout=body.timeout)
+        log.info("exec job started id=%s action=%s", job["id"], body.action)
+        return job
+    except execjobs.ExecError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/run")
+def api_run_list() -> dict[str, Any]:
+    return {"jobs": execjobs.list_jobs()}
+
+
+@app.get("/api/run/{job_id}")
+def api_run_get(job_id: str) -> dict[str, Any]:
+    job = execjobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return job
+
+
+@app.delete("/api/run/{job_id}")
+def api_run_cancel(job_id: str) -> dict[str, Any]:
+    job = execjobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return {"id": job_id, "cancelled": execjobs.cancel(job_id), "status": job["status"]}
+
+
+# ------------------------------------------------------ browser routes ---
+
+
+@app.post("/api/browser/inspect")
+async def api_browser_inspect(body: BrowserInspectReq) -> dict[str, Any]:
+    try:
+        return await browser.inspect(body.url, body.actions)
+    except browser.BrowserError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------- web routes ---

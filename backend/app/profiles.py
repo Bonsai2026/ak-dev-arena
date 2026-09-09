@@ -17,6 +17,7 @@ PROFILES: dict[str, dict[str, Any]] = {
             "search", "run", "run_build", "run_tests", "install_dependency",
             "start_server", "stop_server",
             "git_status", "git_diff", "git_checkpoint", "git_revert",
+            "browser_inspect",
             "todo", "mcp",
         ],
         "system": ("You are a coding specialist. Make minimal, correct changes, then ACTUALLY "

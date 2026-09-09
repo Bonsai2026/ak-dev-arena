@@ -51,6 +51,7 @@ permissions:
   git_revert: ask
   web_search: allow
   web_fetch: allow
+  browser_inspect: ask
   todo: allow
   mcp: ask
 

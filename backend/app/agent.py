@@ -27,7 +27,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import config as config_mod
-from . import contextx, files, gitops, llm, mcp_client, procman, profiles, projects, todos, web
+from . import (browser, contextx, files, gitops, llm, mcp_client, procman,
+               profiles, projects, todos, web)
 
 BASE_SYSTEM = """You are the AK Dev Studio agent — an AI engineer working on the user's PC.
 Solve the task step by step, using tools to inspect, edit, build and test.
@@ -55,6 +56,7 @@ TOOL_DOCS = {
     "git_revert": 'git_revert {} — safe undo of the last arena checkpoint',
     "web_search": 'web_search {"q": "query", "max_results": 5}',
     "web_fetch": 'web_fetch {"url": "https://..."}',
+    "browser_inspect": 'browser_inspect {"url": "http://127.0.0.1:PORT", "actions": [{"type": "click|fill|text|wait", "selector": "...", "value": "..."}]}',
     "todo": 'todo {"action": "add|done|list", "text": "...", "id": "..."}',
     "mcp": 'mcp {"server": "id", "tool": "name", "args": {...}}',
     "done": 'done {"summary": "...", "verification": [["criteria", "pass"]]}',
@@ -91,7 +93,8 @@ def default_permissions() -> dict[str, str]:
     perms = {t: "allow" for t in TOOL_DOCS if t != "done"}
     # dangerous-by-default tools request approval unless explicitly allowed
     perms.update({"delete_file": "ask", "install_dependency": "ask",
-                  "start_server": "ask", "git_revert": "ask", "git_checkpoint": "ask"})
+                  "start_server": "ask", "git_revert": "ask", "git_checkpoint": "ask",
+                  "browser_inspect": "ask"})
     return perms
 
 
@@ -284,6 +287,13 @@ async def _dispatch(tool: str, args: dict[str, Any], work_dir: Path,
             page = web.web_fetch(args.get("url", ""))
             return f"{page['title']}\n{page['url']}\n{page['text']}"[:4000]
         except web.WebError as exc:
+            return f"ERROR: {exc}"
+    if tool == "browser_inspect":
+        try:
+            report = await browser.inspect(str(args.get("url", "")),
+                                           args.get("actions") or [])
+            return json.dumps(report)[:6000]
+        except browser.BrowserError as exc:
             return f"ERROR: {exc}"
     if tool == "todo":
         action = str(args.get("action", "list")).lower()

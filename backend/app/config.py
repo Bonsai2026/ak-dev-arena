@@ -46,7 +46,7 @@ class AppConfig(BaseModel):
             "start_server": "ask", "stop_server": "allow",
             "git_status": "allow", "git_diff": "allow",
             "git_checkpoint": "ask", "git_revert": "ask",
-            "web_search": "allow", "web_fetch": "allow",
+            "web_search": "allow", "web_fetch": "allow", "browser_inspect": "ask",
             "todo": "allow", "mcp": "ask",
         }
     )

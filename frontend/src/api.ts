@@ -352,6 +352,82 @@ export async function buildFix(name: string, error: string, model: string): Prom
   return post("/api/build/fix", { name, error, model });
 }
 
+/* --------------------------- run/build jobs (Phase C) --------------------- */
+
+export type RunAction = "install" | "build" | "test" | "serve";
+
+export interface RunJob {
+  id: string;
+  action: RunAction;
+  path: string;
+  project_type: string;
+  status: "queued" | "running" | "serving" | "passed" | "failed" | "cancelled" | "stopped";
+  created: number;
+  finished: number | null;
+  exit_code: number | null;
+  duration: number | null;
+  output: string;
+  error: string;
+  pid: number | null;
+  port: number | null;
+  url: string | null;
+  cmd: string;
+}
+
+export async function runJob(
+  action: RunAction,
+  path = "",
+  port?: number
+): Promise<RunJob> {
+  return post("/api/run", { action, path, port });
+}
+
+export async function getRunJob(id: string): Promise<RunJob> {
+  return asJson(await fetch(`/api/run/${id}`));
+}
+
+export async function cancelRunJob(id: string): Promise<{ cancelled: boolean; status: string }> {
+  return asJson(await fetch(`/api/run/${id}`, { method: "DELETE" }));
+}
+
+/* ------------------------------ workspace (Phase C) ----------------------- */
+
+export interface WorkspaceInfo {
+  layout: Record<string, string>;
+  usage: {
+    workspace: string;
+    akdev_bytes: number;
+    limit_bytes: number;
+    user_files_bytes: number;
+    by_dir: Record<string, number>;
+  };
+}
+
+export async function getWorkspace(): Promise<WorkspaceInfo> {
+  return asJson(await fetch("/api/workspace"));
+}
+
+export async function cleanupWorkspace(
+  max_age_hours = 24
+): Promise<{ removed_files: number; removed_bytes: number; usage: WorkspaceInfo["usage"] }> {
+  return post("/api/workspace/cleanup", { max_age_hours });
+}
+
+export interface BrowserReport {
+  url: string;
+  status_code: number | null;
+  title: string;
+  console_errors: string[];
+  failed_requests: string[];
+  action_results: { type: string; ok: boolean; text?: string; error?: string }[];
+  body_snippet: string;
+  has_errors: boolean;
+}
+
+export async function browserInspect(url: string, actions: { type: string; selector?: string; value?: string }[] = []): Promise<BrowserReport> {
+  return post("/api/browser/inspect", { url, actions });
+}
+
 /* ---------------------------------- review --------------------------------- */
 
 export async function reviewDiff(diff: string, model: string): Promise<{ summary: string; findings: Finding[] }> {
