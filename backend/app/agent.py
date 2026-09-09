@@ -427,6 +427,8 @@ async def run_agent(task: str, model: str, max_steps: int = 8,
             return {"status": "cancelled", "steps": steps,
                     "summary": f"Cancelled after {len(steps)} steps.",
                     "verification": _summarize_evidence(steps)}
+        if len(messages) > 24:
+            messages = _compact_messages(messages)
         try:
             resp = await _llm_call_with_retry(model, messages, 1500, 0.3, cancel)
         except asyncio.CancelledError:
@@ -479,6 +481,32 @@ async def run_agent(task: str, model: str, max_steps: int = 8,
             "summary": f"Stopped after {len(steps)} steps (limit reached).",
             "verification": _summarize_evidence(steps),
             "elapsed": round(time.time() - started, 1)}
+
+
+def _compact_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Bound conversation growth: keep system + task, summarize the middle.
+
+    Instead of sending every observation forever, past tool activity is
+    condensed into one line so long tasks never blow the context window.
+    """
+    if len(messages) <= 24:
+        return messages
+    head = messages[:2]  # system (+ instructions) + user task
+    tail = messages[-8:]  # recent activity
+    tools: dict[str, int] = {}
+    for m in messages[2:-8]:
+        if m.get("role") == "assistant":
+            try:
+                obj = _extract_json(str(m.get("content", "")))
+                tool = str(obj.get("tool", ""))
+                tools[tool] = tools.get(tool, 0) + 1
+            except AgentError:
+                continue
+    summary = "Earlier activity (compacted): " + ", ".join(
+        f"{t} x{n}" for t, n in sorted(tools.items())) if tools else \
+        "Earlier activity (compacted): see steps history."
+    middle = [{"role": "user", "content": summary}]
+    return head + middle + tail
 
 
 def _normalize_criteria(raw: Any) -> list[dict[str, str]]:

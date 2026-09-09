@@ -357,6 +357,38 @@ def list_providers() -> dict[str, Any]:
     return {"providers": vault.provider_status()}
 
 
+# ------------------------------------------------ custom providers ---
+# OpenAI-compatible endpoints saved in config.local.yaml (API keys go to the
+# vault under ARENA_CUSTOM_<ID>_KEY). Base URLs are normalized (no double /v1).
+
+
+class CustomProviderRequest(BaseModel):
+    id: str = Field(min_length=1, max_length=50, pattern=r"^[A-Za-z0-9_-]+$")
+    name: str = Field(default="", max_length=100)
+    base_url: str = Field(min_length=1, max_length=500)
+    model: str = Field(default="", max_length=200)
+
+
+@app.get("/api/providers/custom")
+def list_custom_providers() -> dict[str, Any]:
+    return {"providers": list(catalog.custom_providers().values())}
+
+
+@app.post("/api/providers/custom")
+def create_custom_provider(body: CustomProviderRequest) -> dict[str, Any]:
+    try:
+        return {"provider": catalog.upsert_custom_provider(
+            body.id, body.name, body.base_url, body.model)}
+    except catalog.CatalogError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/providers/custom/{provider_id}")
+def delete_custom_provider(provider_id: str) -> dict[str, Any]:
+    return {"deleted": catalog.remove_custom_provider(provider_id),
+            "id": provider_id.lower()}
+
+
 @app.post("/api/keys")
 def save_key(body: KeyRequest) -> dict[str, Any]:
     try:

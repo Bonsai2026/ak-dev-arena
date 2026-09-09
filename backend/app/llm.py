@@ -12,7 +12,7 @@ from typing import Any, AsyncIterator
 
 import litellm
 
-from . import catalog, vault
+from . import catalog, usage as usage_mod, vault
 
 # litellm can be chatty; keep server logs clean
 litellm.suppress_debug_info = True
@@ -118,6 +118,12 @@ async def chat_completion(
         }
     except Exception:  # noqa: BLE001, S110 — usage is best-effort
         pass
+    # Every LLM call is tracked centrally (tokens only, never content).
+    usage_mod.record(
+        model=str(resp.model or model), provider=provider,
+        prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
+        completion_tokens=int(usage.get("completion_tokens", 0) or 0), stream=False,
+    )
     return {"content": content, "model": resp.model or model, "provider": provider, "usage": usage}
 
 

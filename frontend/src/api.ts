@@ -103,8 +103,35 @@ export interface Finding {
 }
 
 export interface UsageSummary {
-  totals: { calls: number; prompt: number; completion: number; total: number };
-  by_model: { model: string; calls: number; prompt: number; completion: number; total: number }[];
+  totals: { calls: number; prompt: number; completion: number; total: number; cost: number };
+  by_model: { model: string; calls: number; prompt: number; completion: number; total: number; cost: number }[];
+}
+
+export interface CustomProvider {
+  id: string;
+  name: string;
+  base_url: string;
+  model: string;
+}
+
+export async function getCustomProviders(): Promise<CustomProvider[]> {
+  const res = await asJson(await fetch("/api/providers/custom"));
+  return res.providers ?? [];
+}
+
+export async function addCustomProvider(p: {
+  id: string;
+  name: string;
+  base_url: string;
+  model: string;
+}): Promise<CustomProvider> {
+  const res = await post("/api/providers/custom", p);
+  return res.provider;
+}
+
+export async function deleteCustomProvider(id: string): Promise<boolean> {
+  const res = await asJson(await fetch(`/api/providers/custom/${id}`, { method: "DELETE" }));
+  return res.deleted ?? false;
 }
 
 async function asJson(res: Response): Promise<any> {
