@@ -622,7 +622,9 @@ async def _task_runner(state: dict[str, Any], task: str, model: str,
             timeout=TASK_TIMEOUT_SECONDS)
         state.update({k: result.get(k) for k in
                       ("status", "summary", "verification", "criteria", "error")})
-        state["status"] = result.get("status", "done")
+        # run_agent's terminal status is "complete" → task API reports "done".
+        state["status"] = "done" if result.get("status") == "complete" \
+            else result.get("status", "done")
         state["summary"] = result.get("summary", "")
         state["verification"] = result.get("verification")
         state["criteria"] = result.get("criteria", [])

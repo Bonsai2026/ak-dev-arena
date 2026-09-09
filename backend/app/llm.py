@@ -87,8 +87,14 @@ def _friendly_error(exc: Exception, provider: str) -> ArenaLLMError:
         if provider == "ollama":
             return ArenaLLMError("Cannot reach Ollama. Is `ollama serve` running on http://localhost:11434?")
         return ArenaLLMError(f"Cannot reach '{provider}'. Check your internet connection.")
+    if "InternalServerError" in name or "500" in msg or "server_error" in msg.lower():
+        return ArenaLLMError(f"Provider '{provider}' had a server error. Try again in a moment.")
+    if "BadRequest" in name or "400" in msg:
+        return ArenaLLMError(f"Provider '{provider}' rejected the request. Check the model id and prompt size.")
+    if "Timeout" in name or "timeout" in msg.lower():
+        return ArenaLLMError(f"Provider '{provider}' timed out. Try again.")
     short = msg.strip().split("\n")[0][:300]
-    return ArenaLLMError(f"LLM call failed ({name}): {short}")
+    return ArenaLLMError(f"LLM call failed ({name}) on '{provider}': {short}")
 
 
 async def chat_completion(

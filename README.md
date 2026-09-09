@@ -30,7 +30,7 @@ Bring **any API key** — **215+ providers, 7,500+ models** via the open [models
 
 Extras: **⌘K command palette** · **📊 usage tracker** (see every token) · **🔑 key vault** (keys never leak) · **🐳 sandbox-ready** agent design.
 
-Full plan: [`docs/ROADMAP.md`](docs/ROADMAP.md) · How it works: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · Shipping: [`docs/RELEASE.md`](docs/RELEASE.md)
+Full plan: [`docs/ROADMAP.md`](docs/ROADMAP.md) · How it works: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · Shipping: [`docs/RELEASE.md`](docs/RELEASE.md) · Honest status: [`docs/STATUS.md`](docs/STATUS.md)
 
 ---
 

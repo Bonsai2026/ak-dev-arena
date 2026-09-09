@@ -25,3 +25,20 @@
 ## Post-1.0 ideas
 Tauri native installers (Win/Mac/Linux code-signed), Docker sandbox executor, light theme,
 persistent agent memory, cloud sync, mobile companion, agent/workflow marketplace.
+
+## Post-v1 production pass (AK Dev Studio — 3-prompt audit plan)
+
+Executed after the audit against Cursor/Manus/Claude/Codex/FreeBuff/OpenCode.
+Live status with evidence: [`docs/STATUS.md`](docs/STATUS.md).
+
+| Phase | Delivered | Commit |
+|---|---|---|
+| **A** Desktop + security foundation | Real Tauri 2 shell (backend launch/child-kill), icons, CORS allowlist, 127.0.0.1 default, SSRF guard, tokenized command allowlist, safe git undo, chat Stop/abort, diagnostics, structured logging | `c2db356` |
+| **A.5** Early Windows smoke | Windows CI job (pytest + frontend build + cargo check), `start.bat`, `docs/WINDOWS.md`, 127.0.0.1 bake-in | `c2db356` |
+| **B** Agent engine | Task store (plan/criteria/steps/files/verification/cancel/timeout), live agent UI, build/test/install/server/git tools, process manager, evidence summarizer, permission ask, approval gate | `2a77811` |
+| **C** Build/run/browser/workspace | `.akdev` workspace manager + safe cleanup, cancellable exec jobs (install/build/test/serve, exit codes, PID/port/URL), Playwright browser inspection + agent tool, Build UI Run & Verify panel | `0569260` |
+| **D** UX/providers/context/usage | Custom providers (normalized base URL, custom key env), cost estimates (honest 0 when unknown), Whisper singleton, context compaction, friendly provider error taxonomy | `42bd703` |
+| **D.5** Acceptance harness | 7 mandatory benchmarks as automated tests, real-provider E2E agent test, final status report | this pass |
+| **E** Full Windows acceptance | on a real Windows PC: `start.bat` → app opens → Agent task runs → build/test/serve → desktop recovery (close=no orphans, reopen=healthy) | pending (needs Windows HW) |
+
+Current test status: **129 passed, 2 skipped** (voice engines optional), frontend production build green.
