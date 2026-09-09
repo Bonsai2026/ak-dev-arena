@@ -22,6 +22,7 @@ from typing import Any
 from . import files
 
 TIMEOUT_DEFAULT = 120
+_MAX_HISTORY = 200
 
 _procs: dict[str, dict[str, Any]] = {}
 
@@ -153,6 +154,7 @@ def stop_all_for_task(task_id: str) -> int:
 
 
 def list_processes() -> list[dict[str, Any]]:
+    _prune_history()
     return [_public(e) for e in sorted(
         _procs.values(), key=lambda e: e["started"], reverse=True)]
 
@@ -174,6 +176,17 @@ def clear_finished() -> int:
     for k in done:
         del _procs[k]
     return len(done)
+
+
+def _prune_history() -> None:
+    """Bounded memory: finished entries beyond MAX_HISTORY are dropped."""
+    finished = [k for k, e in _procs.items()
+                if e.get("status") in ("exited", "stopped", "timeout")]
+    if len(finished) <= _MAX_HISTORY:
+        return
+    finished.sort(key=lambda k: _procs[k].get("started", 0))
+    for k in finished[: len(finished) - _MAX_HISTORY]:
+        del _procs[k]
 
 
 def reset_for_tests() -> None:
