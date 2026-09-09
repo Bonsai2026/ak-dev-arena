@@ -1,42 +1,63 @@
-"""Arena Agent — plan → act → verify loop (Manus/Claude-style + profiles).
+"""AK Dev Studio Agent — plan → act → observe → verify loop with real evidence.
 
 The LLM replies with ONE JSON object per step:
-  {"thought": "...", "tool": "<tool>|done", "args": {...}}
+  {"thought": "...", "tool": "<tool>", "args": {...}}
 
-Profiles (FreeBuff-style): coder / researcher / reviewer / planner — each with
-its own system prompt + restricted toolset.
+Hard rule ("I verified it"): after code changes the agent MUST run the build /
+tests and report the actual exit output. `done` may carry a verification list:
+  done {"summary": "...", "verification": [["criteria", "pass"|"fail"|"unverified"]]}
+
+Profiles (FreeBuff-style): coder / researcher / reviewer / planner.
 Permissions (OpenCode-style): config.yaml -> permissions: {tool: allow|ask|deny}
-Hooks (Claude-Code-style): config.yaml -> hooks: {pre_tool, post_tool} shell cmds.
+Hooks (Claude-Code-style): config.yaml -> hooks: {pre_tool, post_tool}.
+Cancellation + timeouts + task state: see TaskStore at the bottom.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import re
 import shlex
 import subprocess
 import time
+import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import config as config_mod
-from . import contextx, files, llm, mcp_client, profiles, todos, web
+from . import contextx, files, gitops, llm, mcp_client, procman, profiles, projects, todos, web
 
-BASE_SYSTEM = """You are the AK Dev Arena agent. Solve the user's task step by step.
-Reply with EXACTLY ONE JSON object per step, no other text:
-{"thought": "short reasoning", "tool": "<tool>", "args": {...}}"""
+BASE_SYSTEM = """You are the AK Dev Studio agent — an AI engineer working on the user's PC.
+Solve the task step by step, using tools to inspect, edit, build and test.
+Hard rule: NEVER claim something works unless you actually ran it. After code
+changes run the build/tests and report real output. Finish ONLY with:
+{"thought": "short reasoning", "tool": "done", "args": {"summary": "...",
+ "verification": [["criteria", "pass"|"fail"|"unverified"]]}}"""
 
 TOOL_DOCS = {
     "list_files": 'list_files {"path": "optional subdir"}',
     "read_file": 'read_file {"path": "file"}',
     "write_file": 'write_file {"path": "file", "content": "full new content"}',
+    "edit_file": 'edit_file {"path": "file", "old_text": "exact snippet", "new_text": "replacement"}',
+    "delete_file": 'delete_file {"path": "file"}',
     "search": 'search {"q": "text"}',
-    "run": 'run {"cmd": "allow-listed shell command"}',
+    "run": 'run {"cmd": "allow-listed command"}',
+    "run_build": 'run_build {} (detects package.json/pyproject)',
+    "run_tests": 'run_tests {} (npm test / pytest)',
+    "install_dependency": 'install_dependency {"pkg": "name|name@version"}',
+    "start_server": 'start_server {} — starts the dev server, returns port',
+    "stop_server": 'stop_server {"port": 1420}',
+    "git_status": 'git_status {}',
+    "git_diff": 'git_diff {}',
+    "git_checkpoint": 'git_checkpoint {"message": "arena: ..."}',
+    "git_revert": 'git_revert {} — safe undo of the last arena checkpoint',
     "web_search": 'web_search {"q": "query", "max_results": 5}',
     "web_fetch": 'web_fetch {"url": "https://..."}',
     "todo": 'todo {"action": "add|done|list", "text": "...", "id": "..."}',
     "mcp": 'mcp {"server": "id", "tool": "name", "args": {...}}',
-    "done": 'done {"summary": "what was accomplished"}',
+    "done": 'done {"summary": "...", "verification": [["criteria", "pass"]]}',
 }
 
 # Token-based command safety: only known-safe base commands, with sub-command
@@ -62,10 +83,16 @@ class AgentError(Exception):
 
 ASK_LOG: list[dict[str, Any]] = []
 APPROVALS: dict[str, float] = {}  # tool -> expiry timestamp
+_running_servers: dict[str, str] = {}  # task_id -> proc id (one server per task)
+_VERIFICATION_TOOLS = {"run_build", "run_tests", "start_server", "git_checkpoint", "git_revert"}
 
 
 def default_permissions() -> dict[str, str]:
-    return {t: "allow" for t in TOOL_DOCS if t != "done"}
+    perms = {t: "allow" for t in TOOL_DOCS if t != "done"}
+    # dangerous-by-default tools request approval unless explicitly allowed
+    perms.update({"delete_file": "ask", "install_dependency": "ask",
+                  "start_server": "ask", "git_revert": "ask", "git_checkpoint": "ask"})
+    return perms
 
 
 def effective_permissions(overrides: dict[str, str] | None = None) -> dict[str, str]:
@@ -166,7 +193,8 @@ def _extract_json(text: str) -> dict[str, Any]:
     return obj
 
 
-async def _dispatch(tool: str, args: dict[str, Any], work_dir: Path) -> str:
+async def _dispatch(tool: str, args: dict[str, Any], work_dir: Path,
+                    task_id: str | None = None) -> str:
     if tool == "list_files":
         entries = files.list_files(args.get("path", ""), root=work_dir)
         return json.dumps(entries)[:4000]
@@ -175,10 +203,76 @@ async def _dispatch(tool: str, args: dict[str, Any], work_dir: Path) -> str:
     if tool == "write_file":
         res = files.write_file(args.get("path", ""), args.get("content", ""), root=work_dir)
         return f"Wrote {res['path']} ({res['bytes']} bytes)."
+    if tool == "edit_file":
+        res = files.apply_edit(args.get("path", ""), args.get("old_text", ""),
+                               args.get("new_text", ""), root=work_dir)
+        return f"Edited {res['path']}.\n{res['diff']}"[:4000]
+    if tool == "delete_file":
+        res = files.delete_file(args.get("path", ""), root=work_dir)
+        return f"Deleted {res['path']}."
     if tool == "search":
         return json.dumps(files.search(args.get("q", ""), root=work_dir))[:4000]
     if tool == "run":
         return run_command(args.get("cmd", ""), cwd=work_dir)
+    if tool in ("run_build", "run_tests"):
+        project = projects.detect(work_dir)
+        cmd = projects.build_cmd(project) if tool == "run_build" else projects.test_cmd(project)
+        if not cmd:
+            return (f"ERROR: no {tool.replace('run_', '')} command detected for this project "
+                    f"(type={project['type']}, scripts={project['scripts'] or 'none'}).")
+        res = procman.run(cmd, work_dir, timeout=600, task_id=task_id)
+        tail = ((res.get("stdout") or "") + "\n" + (res.get("stderr") or "")).strip()[-4000:]
+        return f"exit={res['exit_code']} duration={res['duration']}s\n{tail}"
+    if tool == "install_dependency":
+        pkg = str(args.get("pkg", "") or "").strip()
+        if not re.match(r"^[A-Za-z0-9_@.\-/\[\]=<>,~^]+$", pkg):
+            return "ERROR: invalid package name."
+        project = projects.detect(work_dir)
+        if project["type"] == "node":
+            cmd = ["npm", "install", pkg]
+        elif project["type"] == "python":
+            cmd = ["python", "-m", "pip", "install", pkg]
+        else:
+            return "ERROR: unsupported project type for install."
+        res = procman.run(cmd, work_dir, timeout=600, task_id=task_id)
+        tail = ((res.get("stdout") or "") + "\n" + (res.get("stderr") or "")).strip()[-3000:]
+        return f"exit={res['exit_code']}\n{tail}"
+    if tool == "start_server":
+        if _running_servers.get(task_id or "global"):
+            return "ERROR: a server is already running for this task. Stop it first."
+        project = projects.detect(work_dir)
+        port = procman.find_free_port()
+        cmd = projects.dev_cmd(project, port)
+        if not cmd:
+            return f"ERROR: no dev/start script detected (type={project['type']})."
+        info = procman.start(cmd, work_dir, task_id=task_id, port=port)
+        _running_servers[task_id or "global"] = info["id"]
+        return (f"Server started: pid={info['pid']} id={info['id']} "
+                f"url=http://127.0.0.1:{port} (cmd: {info['command']})")
+    if tool == "stop_server":
+        port = int(args.get("port", 0) or 0)
+        stopped = False
+        if port:
+            stopped = procman.stop_by_port(port)
+        for tid, pid in list(_running_servers.items()):
+            if not port or _running_servers.get(tid) == pid:
+                stopped = procman.stop(pid) or stopped
+                del _running_servers[tid]
+        return "Server stopped." if stopped else ("No server running on that port." if port
+                                                  else "No server running.")
+    if tool in ("git_status", "git_diff", "git_checkpoint", "git_revert"):
+        try:
+            if tool == "git_status":
+                return json.dumps(gitops.status(root=work_dir))[:4000]
+            if tool == "git_diff":
+                return gitops.diff(root=work_dir) or "No changes."
+            if tool == "git_checkpoint":
+                msg = args.get("message", "arena: agent checkpoint")[:200]
+                cp = gitops.checkpoint("", msg, root=work_dir)
+                return f"Checkpoint {cp['hash'] or 'clean'}: {cp['message']}"
+            return json.dumps(gitops.undo(root=work_dir))[:4000]
+        except gitops.GitError as exc:
+            return f"ERROR: {exc}"
     if tool == "web_search":
         try:
             return json.dumps(web.web_search(
@@ -213,7 +307,8 @@ async def _dispatch(tool: str, args: dict[str, Any], work_dir: Path) -> str:
 
 
 async def _execute(tool: str, args: dict[str, Any], work_dir: Path,
-                   permissions: dict[str, str]) -> str:
+                   permissions: dict[str, str],
+                   task_id: str | None = None) -> str:
     args = args if isinstance(args, dict) else {}
     perm = permissions.get(tool, "allow")
     if perm == "deny":
@@ -228,17 +323,78 @@ async def _execute(tool: str, args: dict[str, Any], work_dir: Path,
         hooks = {}
     pre = _run_hook(str(hooks.get("pre_tool", "")), tool, args)
     try:
-        result = await _dispatch(tool, args, work_dir)
+        result = await _dispatch(tool, args, work_dir, task_id=task_id)
     finally:
         post = _run_hook(str(hooks.get("post_tool", "")), tool, args)
     extra = "".join(f"\n[hook:{k}] {v}" for k, v in (("pre", pre), ("post", post)) if v)
     return result + extra[:2000]
 
 
+async def _llm_call_with_retry(model: str, messages: list[dict[str, str]],
+                               max_tokens: int, temperature: float,
+                               cancel: asyncio.Event | None) -> dict[str, Any]:
+    """One LLM call with 1 retry for transient failures (rate limit / network)."""
+    last: Exception | None = None
+    for attempt in range(2):
+        if cancel is not None and cancel.is_set():
+            raise asyncio.CancelledError()
+        try:
+            return await llm.chat_completion(model, messages,
+                                             max_tokens=max_tokens, temperature=temperature)
+        except llm.ArenaLLMError as exc:
+            msg = str(exc).lower()
+            transient = ("rate limit" in msg or "cannot reach" in msg
+                         or "connection" in msg or "timeout" in msg)
+            if not transient or attempt >= 1:
+                raise
+            last = exc
+            await asyncio.sleep(1.5 * (attempt + 1))
+    if last:  # pragma: no cover — unreachable, kept for type safety
+        raise last
+    raise RuntimeError("LLM call failed")  # pragma: no cover
+
+
+def _summarize_evidence(steps: list[dict[str, Any]]) -> dict[str, Any]:
+    """Derive verification evidence from what the agent ACTUALLY ran."""
+    evidence: dict[str, Any] = {"build": None, "tests": None, "servers": [],
+                                "commands": [], "has_evidence": False}
+    for s in steps:
+        tool, result = s.get("tool"), s.get("result", "")
+        status = "unverified"
+        if tool in ("run_build", "run_tests") and result.startswith("exit="):
+            try:
+                code = int(result.split()[0].split("=")[1])
+                status = "pass" if code == 0 else "fail"
+                evidence["has_evidence"] = True
+            except (ValueError, IndexError):
+                pass
+            (evidence.__setitem__("build" if tool == "run_build" else "tests", status))
+        elif tool == "start_server" and "Server started" in result:
+            evidence["servers"].append(result.split("pid=")[1].split()[0])
+            evidence["has_evidence"] = True
+        elif tool == "run":
+            if "exit=" in result:
+                try:
+                    code = int(result.split("exit=")[1].split()[0])
+                    if code == 0:
+                        evidence["commands"].append({"ok": True})
+                        evidence["has_evidence"] = True
+                except (ValueError, IndexError):
+                    pass
+    return evidence
+
+
 async def run_agent(task: str, model: str, max_steps: int = 8,
                     work_dir: Path | None = None, profile: str = "coder",
-                    permissions: dict[str, str] | None = None) -> dict[str, Any]:
-    """Run the agent loop. Returns steps + status + summary."""
+                    permissions: dict[str, str] | None = None,
+                    cancel: asyncio.Event | None = None,
+                    on_step: Callable[[dict[str, Any]], None] | None = None,
+                    task_id: str | None = None) -> dict[str, Any]:
+    """Run the agent loop. Returns steps + status + summary + verification.
+
+    Cancellation: pass an asyncio.Event — checked before every LLM call/step.
+    Callbacks: on_step(step) is invoked after each tool finishes.
+    """
     try:
         prof = profiles.get_profile(profile or "coder")
     except KeyError as exc:
@@ -255,16 +411,28 @@ async def run_agent(task: str, model: str, max_steps: int = 8,
         [{"role": "system", "content": system}, {"role": "user", "content": task}],
         root=work_dir)
     steps: list[dict[str, Any]] = []
-    for _ in range(max(1, min(max_steps, 25))):
+    started = time.time()
+    for idx in range(max(1, min(max_steps, 25))):
+        if cancel is not None and cancel.is_set():
+            return {"status": "cancelled", "steps": steps,
+                    "summary": f"Cancelled after {len(steps)} steps.",
+                    "verification": _summarize_evidence(steps)}
         try:
-            resp = await llm.chat_completion(model, messages, max_tokens=1500, temperature=0.3)
+            resp = await _llm_call_with_retry(model, messages, 1500, 0.3, cancel)
+        except asyncio.CancelledError:
+            return {"status": "cancelled", "steps": steps,
+                    "summary": "Cancelled.", "verification": _summarize_evidence(steps)}
         except llm.ArenaLLMError as exc:
-            return {"status": "error", "steps": steps, "summary": str(exc)}
+            return {"status": "error", "steps": steps, "summary": str(exc),
+                    "verification": _summarize_evidence(steps)}
         raw = resp.get("content", "")
         try:
             step = _extract_json(raw)
         except AgentError as exc:
-            steps.append({"thought": "", "tool": "error", "args": {}, "result": str(exc)})
+            error_step = {"thought": "", "tool": "error", "args": {}, "result": str(exc)}
+            steps.append(error_step)
+            if on_step:
+                on_step({**error_step, "index": idx})
             messages.append({"role": "assistant", "content": raw})
             messages.append({"role": "user", "content": "ERROR: reply with ONE valid JSON object."})
             continue
@@ -273,23 +441,53 @@ async def run_agent(task: str, model: str, max_steps: int = 8,
         args = step.get("args", {})
         if tool == "done":
             summary = str(args.get("summary", "Done.") if isinstance(args, dict) else "Done.")
+            verification = (args.get("verification", []) if isinstance(args, dict) else [])
             steps.append({"thought": thought, "tool": "done", "args": {}, "result": summary})
-            return {"status": "complete", "steps": steps, "summary": summary}
+            if on_step:
+                on_step({"thought": thought, "tool": "done", "args": {}, "result": summary,
+                         "index": idx})
+            return {"status": "complete", "steps": steps, "summary": summary,
+                    "verification": _summarize_evidence(steps),
+                    "criteria": _normalize_criteria(verification)}
         if tool not in allowed:
             result = (f"ERROR: tool '{tool}' not allowed for profile '{pid}'. "
                       f"Allowed: {sorted(allowed)}")
         else:
             try:
                 result = await _execute(tool, args if isinstance(args, dict) else {},
-                                        work_dir, perms)
-            except (AgentError, files.FileError) as exc:
+                                        work_dir, perms, task_id=task_id)
+            except (AgentError, files.FileError, gitops.GitError) as exc:
                 result = f"ERROR: {exc}"
-        steps.append({"thought": thought, "tool": tool,
-                      "args": args if isinstance(args, dict) else {}, "result": result[:4000]})
+        step_entry = {"thought": thought, "tool": tool,
+                      "args": args if isinstance(args, dict) else {}, "result": result[:4000]}
+        steps.append(step_entry)
+        if on_step:
+            on_step({**step_entry, "index": idx})
         messages.append({"role": "assistant", "content": raw})
         messages.append({"role": "user", "content": f"OBSERVATION:\n{result[:3000]}"})
     return {"status": "max_steps", "steps": steps,
-            "summary": f"Stopped after {len(steps)} steps (limit reached)."}
+            "summary": f"Stopped after {len(steps)} steps (limit reached).",
+            "verification": _summarize_evidence(steps),
+            "elapsed": round(time.time() - started, 1)}
+
+
+def _normalize_criteria(raw: Any) -> list[dict[str, str]]:
+    """done verification arg → [{criteria, status}] with strict status labels."""
+    out: list[dict[str, str]] = []
+    if not isinstance(raw, list):
+        return out
+    for item in raw[:15]:
+        if isinstance(item, list) and len(item) >= 2:
+            criteria, status = str(item[0])[:200], str(item[1]).lower()
+        elif isinstance(item, dict):
+            criteria = str(item.get("criteria", ""))[:200]
+            status = str(item.get("status", "")).lower()
+        else:
+            continue
+        if status not in ("pass", "fail", "unverified"):
+            status = "unverified"
+        out.append({"criteria": criteria or "?", "status": status})
+    return out
 
 
 async def plan_task(task: str, model: str, work_dir: Path | None = None) -> dict[str, Any]:
@@ -326,3 +524,134 @@ async def plan_task(task: str, model: str, work_dir: Path | None = None) -> dict
         except todos.TodoError:
             pass
     return {"plan": steps, "todos": created}
+
+
+# ========================================================================
+# Task Store — long-running agent tasks: progress, cancellation, timeouts.
+# ========================================================================
+
+TASK_TIMEOUT_SECONDS = int(os.environ.get("ARENA_AGENT_TIMEOUT", "900"))
+_TASKS: dict[str, dict[str, Any]] = {}
+_MAX_TASKS = 100
+
+
+def _task_public(state: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in state.items() if not k.startswith("_")}
+
+
+def _prune_tasks() -> None:
+    if len(_TASKS) <= _MAX_TASKS:
+        return
+    finished = sorted(
+        (s for s in _TASKS.values() if s.get("finished")),
+        key=lambda s: s["finished"] or 0)
+    for s in finished[: len(_TASKS) - _MAX_TASKS]:
+        _TASKS.pop(s["id"], None)
+
+
+async def _task_runner(state: dict[str, Any], task: str, model: str,
+                       max_steps: int, profile: str, work_dir: Path) -> None:
+    cancel: asyncio.Event = state["_cancel"]
+    state["status"] = "running"
+    state["started"] = time.time()
+    # Step 1 — plan (goals + todos), best-effort
+    try:
+        plan = await plan_task(task, model, work_dir=work_dir)
+        state["plan"] = plan.get("plan", [])
+    except Exception:  # noqa: BLE001, S110 — planning must never kill the task
+        pass
+
+    def _on_step(step: dict[str, Any]) -> None:
+        tool = step.get("tool", "")
+        args = step.get("args") or {}
+        if tool in ("write_file", "edit_file") and args.get("path"):
+            path = str(args["path"])
+            if path not in state["files"]:
+                state["files"].append(path)
+        elif tool == "delete_file" and args.get("path"):
+            path = str(args["path"])
+            if path in state["files"]:
+                state["files"].remove(path)
+            state["files"].append(f"{path} (deleted)")
+        state["current"] = {"tool": tool, "thought": step.get("thought", ""),
+                            "result": step.get("result", "")[:2000]}
+        state["steps"].append({k: v for k, v in step.items() if k != "index"})
+
+    try:
+        result = await asyncio.wait_for(
+            run_agent(task, model, max_steps, work_dir=work_dir, profile=profile,
+                      cancel=cancel, on_step=_on_step, task_id=state["id"]),
+            timeout=TASK_TIMEOUT_SECONDS)
+        state.update({k: result.get(k) for k in
+                      ("status", "summary", "verification", "criteria", "error")})
+        state["status"] = result.get("status", "done")
+        state["summary"] = result.get("summary", "")
+        state["verification"] = result.get("verification")
+        state["criteria"] = result.get("criteria", [])
+        if result.get("status") in ("error",):
+            state["error"] = result.get("summary", "")
+    except asyncio.TimeoutError:
+        cancel.set()
+        state["status"] = "timeout"
+        state["summary"] = f"Stopped after {TASK_TIMEOUT_SECONDS}s (global timeout)."
+        state["error"] = state["summary"]
+    except asyncio.CancelledError:
+        cancel.set()
+        state["status"] = "cancelled"
+        state["summary"] = "Cancelled by user."
+    except Exception as exc:  # noqa: BLE001 — tasks must never crash the server
+        state["status"] = "failed"
+        state["error"] = str(exc)[:400]
+        state["summary"] = "Task failed — see error."
+    finally:
+        procman.stop_all_for_task(state["id"])
+        state["finished"] = time.time()
+        state["current"] = None
+        state["status"] = state["status"] if state["status"] != "running" else "failed"
+
+
+def create_task(task: str, model: str, max_steps: int = 8,
+                profile: str = "coder", work_dir: Path | None = None) -> dict[str, Any]:
+    tid = uuid.uuid4().hex[:8]
+    state: dict[str, Any] = {
+        "id": tid, "task": task, "model": model, "profile": profile,
+        "status": "queued", "created": time.time(), "started": None, "finished": None,
+        "steps": [], "current": None, "summary": "", "error": "",
+        "verification": None, "criteria": [], "plan": [], "files": [],
+        "_cancel": asyncio.Event(),
+    }
+    _TASKS[tid] = state
+    base = (work_dir or files.WORKSPACE).resolve()
+    base.mkdir(parents=True, exist_ok=True)
+    state["_task"] = asyncio.get_running_loop().create_task(
+        _task_runner(state, task, model, max_steps, profile, base))
+    _prune_tasks()
+    return _task_public(state)
+
+
+def get_task(task_id: str) -> dict[str, Any] | None:
+    state = _TASKS.get(task_id)
+    return _task_public(state) if state else None
+
+
+def list_tasks() -> list[dict[str, Any]]:
+    return [_task_public(s) for s in sorted(
+        _TASKS.values(), key=lambda s: s["created"], reverse=True)]
+
+
+def cancel_task(task_id: str) -> bool:
+    state = _TASKS.get(task_id)
+    if not state or state["status"] in ("done", "failed", "cancelled", "timeout"):
+        return False
+    state["_cancel"].set()
+    return True
+
+
+def reset_tasks_for_tests() -> None:
+    for state in list(_TASKS.values()):
+        task = state.get("_task")
+        if task:
+            task.cancel()
+        state["_cancel"].set()
+        procman.stop_all_for_task(state.get("id", ""))
+    _TASKS.clear()

@@ -42,6 +42,15 @@ def init(path: str = "", root: Path | None = None) -> dict:
     return {"initialized": True, "path": str(repo)}
 
 
+def diff(path: str = "", root: Path | None = None, max_chars: int = 12000) -> str:
+    """Unified diff of working-tree changes vs HEAD (empty if not a repo)."""
+    repo = _repo_root(path, root)
+    if not is_repo(path, root):
+        return ""
+    proc = _run(["diff", "HEAD"], repo)
+    return ((proc.stdout or "") + (proc.stderr or ""))[:max_chars]
+
+
 def status(path: str = "", root: Path | None = None) -> dict:
     repo = _repo_root(path, root)
     if not is_repo(path, root):

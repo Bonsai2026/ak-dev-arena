@@ -614,6 +614,38 @@ async def api_agent_run(body: AgentRequest) -> dict[str, Any]:
     return await agent.run_agent(body.task, model, body.max_steps, profile=body.profile or "coder")
 
 
+# Long-running agent tasks: progress + cancellation (Phase B heart).
+@app.post("/api/agent/tasks")
+async def api_agent_task_create(body: AgentRequest) -> dict[str, Any]:
+    model = body.model or _default_model("agent")
+    task_state = agent.create_task(body.task, model, body.max_steps,
+                                   profile=body.profile or "coder")
+    log.info("agent task started id=%s profile=%s", task_state["id"], body.profile or "coder")
+    return task_state
+
+
+@app.get("/api/agent/tasks")
+def api_agent_task_list() -> dict[str, Any]:
+    return {"tasks": agent.list_tasks()}
+
+
+@app.get("/api/agent/tasks/{task_id}")
+def api_agent_task_get(task_id: str) -> dict[str, Any]:
+    state = agent.get_task(task_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    return state
+
+
+@app.delete("/api/agent/tasks/{task_id}")
+def api_agent_task_cancel(task_id: str) -> dict[str, Any]:
+    state = agent.get_task(task_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    cancelled = agent.cancel_task(task_id)
+    return {"id": task_id, "cancelled": cancelled, "status": state["status"]}
+
+
 @app.post("/api/agent/plan")
 async def api_agent_plan(body: PlanRequest) -> dict[str, Any]:
     model = body.model or _default_model("agent")

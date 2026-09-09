@@ -258,6 +258,61 @@ export async function runAgent(
   return post("/api/agent/run", { task, model, max_steps, profile });
 }
 
+/* ----- long-running agent tasks (Phase B): progress, cancel, verify ----- */
+
+export interface AgentTaskStep {
+  thought: string;
+  tool: string;
+  args?: Record<string, unknown>;
+  result: string;
+}
+
+export interface AgentTask {
+  id: string;
+  task: string;
+  model: string;
+  profile: string;
+  status: "queued" | "running" | "complete" | "done" | "failed" | "cancelled" | "timeout";
+  created: number;
+  started: number | null;
+  finished: number | null;
+  steps: AgentTaskStep[];
+  current: { tool: string; thought: string; result: string } | null;
+  summary: string;
+  error: string;
+  plan: string[];
+  files: string[];
+  criteria: { criteria: string; status: string }[];
+  verification: {
+    build: "pass" | "fail" | "unverified" | null;
+    tests: "pass" | "fail" | "unverified" | null;
+    servers: string[];
+    has_evidence: boolean;
+  } | null;
+}
+
+export async function createAgentTask(
+  task: string,
+  model: string,
+  max_steps: number,
+  profile = "coder"
+): Promise<AgentTask> {
+  return post("/api/agent/tasks", { task, model, max_steps, profile });
+}
+
+export async function getAgentTask(id: string): Promise<AgentTask> {
+  return asJson(await fetch(`/api/agent/tasks/${id}`));
+}
+
+export async function listAgentTasks(): Promise<AgentTask[]> {
+  const res = await fetch("/api/agent/tasks");
+  return ((await asJson(res)).tasks ?? []) as AgentTask[];
+}
+
+export async function cancelAgentTask(id: string): Promise<{ id: string; cancelled: boolean; status: string }> {
+  return asJson(await fetch(`/api/agent/tasks/${id}`, { method: "DELETE" }));
+}
+
 /* ---------------------------------- jobs ----------------------------------- */
 
 export async function createJob(task: string, model: string, max_steps: number): Promise<Job> {

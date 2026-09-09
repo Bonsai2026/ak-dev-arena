@@ -134,6 +134,25 @@ def make_diff(path: str, old_text: str, new_text: str) -> str:
     return "\n".join(diff)
 
 
+def delete_file(path: str, root: Path | None = None) -> dict:
+    """Delete a file (or empty directory) INSIDE the workspace only."""
+    base = _root(root)
+    target = _resolve(path, root)
+    if target == base:
+        raise FileError("Refusing to delete the workspace root.")
+    if target.name == ".akrules":
+        raise FileError("Use the instructions UI to remove project rules.")
+    if target.is_file():
+        target.unlink()
+        return {"path": _rel(target, base), "deleted": True, "type": "file"}
+    if target.is_dir():
+        if any(target.iterdir()):
+            raise FileError("Directory is not empty — delete files inside first.")
+        target.rmdir()
+        return {"path": _rel(target, base), "deleted": True, "type": "dir"}
+    raise FileError("Path not found.")
+
+
 def apply_edit(path: str, old_text: str, new_text: str, root: Path | None = None) -> dict:
     base = _root(root)
     current = read_file(path, base)["content"]
