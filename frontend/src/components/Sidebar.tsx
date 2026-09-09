@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ModelEntry, ModelQuery, ProviderEntry, UsageSummary } from "../api";
+import type { InstructionsState, ModelEntry, ModelQuery, ProviderEntry, UsageSummary } from "../api";
 import { deleteKey, refreshCatalog, saveKey } from "../api";
 
 export interface ModeDef {
@@ -24,6 +24,8 @@ interface Props {
   onKeysChanged: () => void;
   usage: UsageSummary | null;
   onPalette: () => void;
+  onOpenInstructions: () => void;
+  instructions?: InstructionsState | null;
 }
 
 export default function Sidebar({
@@ -40,6 +42,8 @@ export default function Sidebar({
   onKeysChanged,
   usage,
   onPalette,
+  onOpenInstructions,
+  instructions,
 }: Props) {
   const [keysOpen, setKeysOpen] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -204,7 +208,16 @@ export default function Sidebar({
         </div>
       )}
 
-      <div className="p-4 border-t border-zinc-800">
+      <div className="p-4 border-t border-zinc-800 space-y-2">
+        <button
+          onClick={onOpenInstructions}
+          className="flex items-center justify-between w-full rounded-lg bg-zinc-900 border border-zinc-700 px-4 py-2.5 text-sm font-semibold hover:border-indigo-500"
+        >
+          <span>📋 Instructions</span>
+          <span className={`text-[11px] font-normal ${instructions?.global_found || instructions?.project_found ? "text-emerald-400" : "text-zinc-600"}`}>
+            {instructions?.global_found || instructions?.project_found ? "on" : "off"}
+          </span>
+        </button>
         <button
           onClick={() => setKeysOpen((v) => !v)}
           className="w-full rounded-lg bg-zinc-900 border border-zinc-700 px-4 py-2.5 text-sm font-semibold hover:border-indigo-500"

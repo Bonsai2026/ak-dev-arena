@@ -95,6 +95,14 @@ class UndoRequest(BaseModel):
     path: str = Field(default="", max_length=500)
 
 
+class InstructionsBody(BaseModel):
+    content: str = Field(max_length=50_000)
+
+
+class RulesBody(BaseModel):
+    content: str = Field(max_length=20_000)
+
+
 class AgentRequest(BaseModel):
     task: str = Field(min_length=1, max_length=20_000)
     model: str = Field(default="", max_length=200)
@@ -417,10 +425,11 @@ async def api_composer(body: ComposerRequest) -> dict[str, Any]:
     model = body.model or _default_model("code")
     tree = contextx._tree_text(None)  # noqa: SLF001 — same package
     try:
-        resp = await llm.chat_completion(model, [
+        messages = contextx.inject_context([
             {"role": "system", "content": COMPOSER_PROMPT},
             {"role": "user", "content": f"WORKSPACE TREE:\n{tree}\n\nTASK:\n{body.instructions}"},
-        ], max_tokens=3000, temperature=0.2)
+        ])
+        resp = await llm.chat_completion(model, messages, max_tokens=3000, temperature=0.2)
     except llm.ArenaLLMError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     raw = resp.get("content", "")
@@ -498,6 +507,32 @@ async def api_complete(body: CompleteRequest) -> dict[str, Any]:
 def api_rules() -> dict[str, Any]:
     rules = contextx.load_rules()
     return {"rules": rules, "found": bool(rules)}
+
+
+@app.get("/api/context/instructions")
+def api_instructions() -> dict[str, Any]:
+    """Chat instructions: global (user-level) + project (.akrules) — Cursor/Claude/Codex-style."""
+    return contextx.rules_summary()
+
+
+@app.put("/api/context/instructions")
+def api_save_instructions(body: InstructionsBody) -> dict[str, Any]:
+    """Save user-level chat instructions (persisted in git-ignored config.local.yaml)."""
+    contextx.save_global_instructions(body.content)
+    return contextx.rules_summary()
+
+
+@app.post("/api/context/rules")
+def api_save_rules(body: RulesBody) -> dict[str, Any]:
+    """Save project rules to .akrules in the workspace root."""
+    contextx.save_rules(body.content)
+    return contextx.rules_summary()
+
+
+@app.delete("/api/context/rules")
+def api_delete_rules() -> dict[str, Any]:
+    contextx.delete_rules()
+    return contextx.rules_summary()
 
 
 # ---------------------------------------------------- agent mode routes ---

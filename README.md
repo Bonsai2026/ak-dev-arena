@@ -6,11 +6,13 @@
 [![CI](https://github.com/Bonsai2026/ak-dev-arena/actions/workflows/ci.yml/badge.svg)](https://github.com/Bonsai2026/ak-dev-arena/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-1.2.0-brightgreen.svg)](config.yaml)
 [![Stack](https://img.shields.io/badge/stack-Tauri%20%2B%20React%20%2B%20FastAPI%20%2B%20LiteLLM-green.svg)](docs/ARCHITECTURE.md)
-[![Tests](https://img.shields.io/badge/tests-69%20passing-brightgreen.svg)](backend/tests)
+[![Tests](https://img.shields.io/badge/tests-79%20passing-brightgreen.svg)](backend/tests)
 
 Bring **any API key** — **215+ providers, 7,500+ models** via the open [models.dev](https://models.dev) registry (same formula OpenCode uses). Add one key → all its models auto-detect. **1,000+ models are FREE** 🆓 — or run **100% local** with Ollama. No lock-in. No ads. No subscriptions. Ever.
 
-**Real open-source engines mixed in:** models.dev catalog (OpenCode formula) · MCP protocol (Anthropic) · Aider repo-maps (auto when installed) · free web research · Cursor-style `@mentions` + rules + Composer + Tab-complete · Claude-style `/slash` + Plan + hooks + permissions · FreeBuff-style profiles + workflows · Manus-style todos + artifacts.
+**Real open-source engines mixed in:** models.dev catalog (OpenCode formula) · MCP protocol (Anthropic) · Aider repo-maps (auto when installed) · free web research · Cursor-style `@mentions` + **chat instructions** + Composer + Tab-complete · Claude-style `/slash` + Plan + hooks + permissions · FreeBuff-style profiles + workflows · Manus-style todos + artifacts.
+
+**📋 Chat instructions (new in v1.2):** set global instructions + project rules (`.akrules`) once, and they're auto-injected into every model call — Chat, Agent, Code Composer, Build and Review. Like Cursor rules · Claude `CLAUDE.md` · Codex `AGENTS.md`.
 
 ---
 
@@ -41,15 +43,26 @@ Full plan: [`docs/ROADMAP.md`](docs/ROADMAP.md) · How it works: [`docs/ARCHITEC
 git clone https://github.com/Bonsai2026/ak-dev-arena.git
 cd ak-dev-arena
 
-# 2. Start the backend (brain 🧠)
-pip install -r backend/requirements.txt
-python -m uvicorn backend.app.main:app --port 8000
+# 2. One-command setup (backend + optional engines + frontend)
+make setup
+# …or manually:
+#   pip install -r backend/requirements.txt
+#   pip install -r backend/requirements-optional.txt   # voice, web search, MCP, repo maps
+#   cd frontend && npm install && cd ..
+
+# 3. Start the backend (brain 🧠)
+make backend          # or: python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
 # → API docs at http://127.0.0.1:8000/docs
 
-# 3. Start the frontend (face 😎) — in a new terminal
-cd frontend && npm install && npm run dev
+# 4. Start the frontend (face 😎) — in a new terminal
+make frontend         # or: cd frontend && npm run dev
 # → App at http://localhost:1420
 ```
+
+**Set your chat instructions** (optional, like Cursor rules / Claude CLAUDE.md / Codex AGENTS.md):
+- Open **📋 Instructions** in the sidebar (or `⌘K` → “Chat instructions”).
+- **Global instructions** apply everywhere; **project rules** save as `.akrules` in `./workspace`.
+- Both are auto-injected into Chat, Agent, Code Composer, Build and Review.
 
 **Add your API key** (pick one):
 - In the app: click **🔑 Keys** in the sidebar, paste key, done.
@@ -63,8 +76,8 @@ cd frontend && npm install && npm run dev
 ## 🧪 Tests
 
 ```bash
-pytest backend/tests -q        # 38 tests — chat, files, git, agent, jobs, build, review, voice, usage
-cd frontend && npm run build   # TypeScript + production build
+make test                      # 79 tests — chat, files, git, agent, jobs, build, review, voice, usage, instructions
+make build                     # TypeScript + production build
 ```
 
 ## 🗂️ Project structure
@@ -75,7 +88,7 @@ ak-dev-arena/
 │   ├── app/            #   main.py (API) · llm.py · vault.py · config.py
 │   │                   #   files.py · gitops.py · agent.py · manager.py
 │   │                   #   builder.py · review.py · voice.py · usage.py
-│   └── tests/          #   38 pytest tests (run in CI)
+│   └── tests/          #   79 pytest tests (run in CI)
 ├── frontend/           # React + Vite + Tailwind — the face (7 modes + ⌘K palette)
 ├── src-tauri/          # Tauri desktop shell (native packaging — needs Rust stable)
 ├── workspace/          # AI playground (git-ignored, created on first run)

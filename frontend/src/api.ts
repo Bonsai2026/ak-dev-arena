@@ -413,6 +413,39 @@ export async function getRules(): Promise<{ rules: string; found: boolean }> {
   return asJson(await fetch("/api/context/rules"));
 }
 
+export interface InstructionsState {
+  global: string;
+  project: string;
+  global_found: boolean;
+  project_found: boolean;
+}
+
+export async function getInstructions(): Promise<InstructionsState> {
+  return asJson(await fetch("/api/context/instructions"));
+}
+
+export async function saveGlobalInstructions(content: string): Promise<InstructionsState> {
+  const res = await fetch("/api/context/instructions", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  return asJson(res);
+}
+
+export async function saveProjectRules(content: string): Promise<InstructionsState> {
+  const res = await fetch("/api/context/rules", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  return asJson(res);
+}
+
+export async function deleteProjectRules(): Promise<InstructionsState> {
+  return asJson(await fetch("/api/context/rules", { method: "DELETE" }));
+}
+
 export async function getProfiles(): Promise<Profile[]> {
   const res = await fetch("/api/agent/profiles");
   return ((await asJson(res)).profiles ?? []) as Profile[];

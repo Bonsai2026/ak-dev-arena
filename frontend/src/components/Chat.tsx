@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import type { ChatMessage } from "../api";
+import type { ChatMessage, InstructionsState } from "../api";
 
 interface Props {
   messages: ChatMessage[];
   streaming: boolean;
   ready: boolean;
   onSend: (text: string) => void;
+  instructions?: InstructionsState | null;
 }
 
 /** Minimal markdown-lite: ``` code blocks + paragraphs. No deps. */
@@ -31,9 +32,10 @@ function renderContent(content: string, keyPrefix: string) {
   });
 }
 
-export default function Chat({ messages, streaming, ready, onSend }: Props) {
+export default function Chat({ messages, streaming, ready, onSend, instructions }: Props) {
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const hasInstructions = Boolean(instructions?.global_found || instructions?.project_found);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -55,8 +57,16 @@ export default function Chat({ messages, streaming, ready, onSend }: Props) {
             <h1 className="text-2xl font-bold">Welcome to AK Dev Arena</h1>
             <p className="text-zinc-400 max-w-md">
               {ready
-                ? "Pick a model in the sidebar and start chatting. Code, Agent, Build and Voice modes are coming in the next phases."
+                ? "Pick a model in the sidebar and start chatting. All 7 modes are live: ⌨️ Code · 🤖 Agent · 👁️ Manager · 🏗️ Build · 🔍 Review · 🎙️ Voice."
                 : "Add an API key via the 🔑 Keys button in the sidebar (or run Ollama locally) to start chatting."}
+            </p>
+            <p className="text-xs text-zinc-500">
+              📋{" "}
+              <span className={hasInstructions ? "text-emerald-400" : ""}>
+                {hasInstructions
+                  ? `Instructions active (${instructions?.global_found ? "global" : ""}${instructions?.global_found && instructions?.project_found ? " + " : ""}${instructions?.project_found ? "project" : ""})`
+                  : "No chat instructions yet — set them via ⌘K → “Chat instructions”"}
+              </span>
             </p>
           </div>
         )}

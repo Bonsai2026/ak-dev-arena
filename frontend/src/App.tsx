@@ -7,8 +7,9 @@ import Manager from "./components/Manager";
 import Build from "./components/Build";
 import Review from "./components/Review";
 import Voice from "./components/Voice";
+import Instructions from "./components/Instructions";
 import Palette, { type PaletteAction } from "./components/Palette";
-import { getModels, getProviders, getUsage, slashRun, streamChat } from "./api";
+import { getInstructions, getModels, getProviders, getUsage, slashRun, streamChat, type InstructionsState } from "./api";
 import type { ChatMessage, ModelEntry, ModelQuery, ProviderEntry, UsageSummary } from "./api";
 
 const MODES: ModeDef[] = [
@@ -33,6 +34,12 @@ export default function App() {
   const [backendUp, setBackendUp] = useState<boolean | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
+  const [instructionsState, setInstructionsState] = useState<InstructionsState | null>(null);
+
+  useEffect(() => {
+    getInstructions().then(setInstructionsState).catch(() => {});
+  }, []);
 
   const refreshCatalog = useCallback(async () => {
     try {
@@ -144,6 +151,7 @@ export default function App() {
         hint: "mode",
         run: () => setMode(m.key),
       })),
+      { label: "📋 Chat instructions", hint: "rules", run: () => setInstructionsOpen(true) },
       { label: "🧹 Clear chat", hint: "chat", run: () => setMessages([]) },
       { label: "🔄 Refresh models & keys", hint: "catalog", run: () => refreshCatalog() },
       { label: "📊 Refresh usage", hint: "usage", run: () => refreshUsage() },
@@ -187,10 +195,12 @@ export default function App() {
         }}
         usage={usage}
         onPalette={() => setPaletteOpen(true)}
+        onOpenInstructions={() => setInstructionsOpen(true)}
+        instructions={instructionsState}
       />
       <main className="flex-1 min-w-0 h-full">
-        {mode === "chat" && <Chat messages={messages} streaming={streaming} ready={ready} onSend={handleSend} />}
-        {mode === "code" && <Code model={currentModel} />}
+        {mode === "chat" && <Chat messages={messages} streaming={streaming} ready={ready} onSend={handleSend} instructions={instructionsState} />}
+        {mode === "code" && <Code model={currentModel} onOpenInstructions={() => setInstructionsOpen(true)} rules={instructionsState} />}
         {mode === "agent" && <Agent model={currentModel} />}
         {mode === "manager" && <Manager model={currentModel} />}
         {mode === "build" && <Build model={currentModel} />}
@@ -198,6 +208,11 @@ export default function App() {
         {mode === "voice" && <Voice onTranscript={handleTranscript} lastAssistant={lastAssistant} />}
       </main>
       <Palette open={paletteOpen} actions={paletteActions} onClose={() => setPaletteOpen(false)} />
+      <Instructions
+        open={instructionsOpen}
+        onClose={() => setInstructionsOpen(false)}
+        onSaved={setInstructionsState}
+      />
     </div>
   );
 }
