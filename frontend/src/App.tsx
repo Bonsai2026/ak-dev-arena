@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Sidebar, { type ModeDef } from "./components/Sidebar";
 import Chat from "./components/Chat";
 import Code from "./components/Code";
@@ -31,6 +31,7 @@ export default function App() {
   const [currentModel, setCurrentModel] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
   const [backendUp, setBackendUp] = useState<boolean | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
@@ -121,18 +122,29 @@ export default function App() {
     setMessages([...next, { role: "assistant" as const, content: "" }]);
     setStreaming(true);
     let acc = "";
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       await streamChat(currentModel, next, (token) => {
         acc += token;
         pushAssistant(acc);
-      });
+      }, controller.signal);
     } catch (e) {
-      pushAssistant(`⚠️ ${e instanceof Error ? e.message : "Request failed"}`);
+      if (e instanceof DOMException && e.name === "AbortError") {
+        pushAssistant(acc ? `${acc}  \n\n⏹ *Stopped by you.*` : "⏹ *Stopped by you.*");
+      } else {
+        pushAssistant(`⚠️ ${e instanceof Error ? e.message : "Request failed"}`);
+      }
     } finally {
+      abortRef.current = null;
       setStreaming(false);
       refreshUsage();
     }
   };
+
+  const stopChat = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
 
   const handleTranscript = (text: string) => {
     setMode("chat");
@@ -199,7 +211,7 @@ export default function App() {
         instructions={instructionsState}
       />
       <main className="flex-1 min-w-0 h-full">
-        {mode === "chat" && <Chat messages={messages} streaming={streaming} ready={ready} onSend={handleSend} instructions={instructionsState} />}
+        {mode === "chat" && <Chat messages={messages} streaming={streaming} ready={ready} onSend={handleSend} onStop={stopChat} instructions={instructionsState} />}
         {mode === "code" && <Code model={currentModel} onOpenInstructions={() => setInstructionsOpen(true)} rules={instructionsState} />}
         {mode === "agent" && <Agent model={currentModel} />}
         {mode === "manager" && <Manager model={currentModel} />}

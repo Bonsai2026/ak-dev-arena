@@ -162,16 +162,18 @@ export async function deleteKey(provider: string): Promise<void> {
 
 /* ---------------------------------- chat ----------------------------------- */
 
-/** POST /api/chat/stream and invoke onToken per SSE delta. */
+/** POST /api/chat/stream and invoke onToken per SSE delta. Pass a signal to cancel. */
 export async function streamChat(
   model: string,
   messages: ChatMessage[],
-  onToken: (token: string) => void
+  onToken: (token: string) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const res = await fetch("/api/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model, messages }),
+    signal,
   });
   if (!res.ok || !res.body) {
     const detail = await res

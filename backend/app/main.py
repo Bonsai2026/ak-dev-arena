@@ -9,12 +9,24 @@ API docs:
 from __future__ import annotations
 
 import json
+import logging
+import os
 from typing import Any, Literal
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
+
+# -------------------------------------------------------------------------
+# Logging — structured-ish, secret-free. API keys are NEVER logged (the vault
+# injects them directly into LLM calls and nothing here prints request bodies).
+# -------------------------------------------------------------------------
+logging.basicConfig(
+    level=os.environ.get("ARENA_LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+log = logging.getLogger("akdevstudio")
 
 from . import (
     __version__,
@@ -40,12 +52,26 @@ from . import (
     workflows,
 )
 
-app = FastAPI(title="AK Dev Arena", version=__version__)
+app = FastAPI(title="AK Dev Studio", version=__version__)
 
-# Local dev: the Vite/Tauri UI talks to this server on localhost.
+# Security: only the app's own UI origins may call the API. Override for extra
+# origins (e.g. a LAN/Tauri build) via ARENA_CORS_ORIGINS="a,b,c".
+DEFAULT_CORS = (
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+)
+CORS_ORIGINS = [o.strip() for o in
+                os.environ.get("ARENA_CORS_ORIGINS", ",".join(DEFAULT_CORS)).split(",")
+                if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -239,6 +265,50 @@ def _record_usage(result: dict[str, Any], stream: bool = False) -> None:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "version": __version__}
+
+
+@app.get("/api/diagnostics")
+def diagnostics() -> dict[str, Any]:
+    """Environment health: what AK Dev Studio can actually use right now."""
+    import shutil
+    import subprocess
+
+    def _which(name: str) -> bool:
+        return shutil.which(name) is not None
+
+    def _ver(cmd: list[str]) -> str:
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            return (out.stdout or out.stderr).strip().splitlines()[0][:80]
+        except Exception:  # noqa: BLE001, S110 — diagnostics must never crash
+            return ""
+
+    ws = files._root(None)  # noqa: SLF001 — same package
+    writable = os.access(ws, os.W_OK)
+    ollama = False
+    try:
+        import httpx
+
+        r = httpx.get(catalog.OLLAMA_BASE + "/api/tags", timeout=1.5)
+        ollama = r.status_code == 200
+    except Exception:  # noqa: BLE001, S110 — ollama is optional
+        pass
+    providers_status = vault.provider_status()
+    configured = [p for p in providers_status if p.get("configured")]
+    return {
+        "version": __version__,
+        "workspace": {"path": str(ws), "writable": writable},
+        "python": _which("python") or _which("python3"),
+        "node": _which("node"),
+        "npm": _which("npm"),
+        "git": _which("git"),
+        "ollama": ollama,
+        "ollama_base": catalog.OLLAMA_BASE,
+        "providers_total": len(providers_status),
+        "providers_configured": len(configured),
+        "provider_names": [p.get("provider") for p in configured],
+        "hints": [] if writable else ["Workspace is not writable."],
+    }
 
 
 @app.get("/api/config")

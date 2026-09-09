@@ -39,11 +39,18 @@ TOOL_DOCS = {
     "done": 'done {"summary": "what was accomplished"}',
 }
 
-ALLOWED_CMD_PREFIXES = (
-    "ls", "cat ", "cat", "echo", "pwd", "python --version", "python3 --version",
-    "pip --version", "node --version", "npm --version", "git status", "git log",
-    "git diff", "pytest", "npm test", "npm run build", "dir", "type ",
-)
+# Token-based command safety: only known-safe base commands, with sub-command
+# allow-lists for multi-purpose tools (git/npm/python). File-reading commands
+# (ls/cat) are constrained to paths inside the workspace. Everything else —
+# delete, install, push, shell pipes, redirects — is rejected outright.
+ALLOWED_BASES = {
+    "ls", "cat", "echo", "pwd", "git", "pytest", "npm", "node",
+    "python", "python3", "dir", "type",
+}
+GIT_SUBS = {"status", "log", "diff"}
+NPM_SUBS = {"test", "run"}
+PYMOD_SUBS = {"pytest"}
+READ_ONLY_BASES = {"ls", "cat", "dir", "type"}
 
 PLAN_PROMPT = """You are a planner. Output EXACTLY ONE JSON object and nothing else:
 {"steps": ["concrete step 1", "concrete step 2", ...]} — 3 to 10 steps."""
@@ -96,14 +103,49 @@ def _run_hook(cmd: str, tool: str, args: dict[str, Any]) -> str:
         return f"(hook error: {exc})"
 
 
+def _validate_command(cmd: str, cwd: Path) -> list[str]:
+    """Tokenize and validate a shell command against the safe allow-list."""
+    try:
+        parts = shlex.split(cmd)
+    except ValueError as exc:
+        raise AgentError(f"Unparsable command: {exc}") from None
+    if not parts:
+        raise AgentError("Empty command.")
+    base = parts[0].lower()
+    if base not in ALLOWED_BASES:
+        raise AgentError(f"Command not allowed: '{base}'")
+    if base in READ_ONLY_BASES:
+        # every path argument must stay inside the workspace (no abs, no ..)
+        for arg in parts[1:]:
+            if arg.startswith(("/", "\\", "~")):
+                raise AgentError(f"Absolute paths not allowed in '{base}'.")
+            resolved = (cwd / arg).resolve()
+            if cwd.resolve() not in [resolved] + list(resolved.parents):
+                raise AgentError(f"Path escapes the workspace in '{base}'.")
+    if base == "git" and (len(parts) < 2 or parts[1].lower() not in GIT_SUBS):
+        raise AgentError("git: only status/log/diff are allowed.")
+    if base == "npm" and (len(parts) < 2 or parts[1].lower() not in NPM_SUBS):
+        raise AgentError("npm: only test/run are allowed.")
+    if base in ("python", "python3"):
+        if len(parts) < 3 or parts[1] != "-m" or parts[2].lower() not in PYMOD_SUBS:
+            raise AgentError("python: only 'python -m pytest ...' is allowed.")
+    if base == "node":
+        if "--version" not in parts and "-v" not in parts:
+            raise AgentError("node: only --version is allowed.")
+    if base in ("echo", "pwd", "dir", "type"):
+        pass  # inherently safe
+    if any(ch in cmd for ch in ("|", ">", "&", ";", "`", "$(")):
+        raise AgentError("Shell metacharacters are not allowed.")
+    return parts
+
+
 def run_command(cmd: str, cwd: Path, timeout: int = 60) -> str:
     cmd = (cmd or "").strip()
     if not cmd:
         raise AgentError("Empty command.")
-    if not cmd.startswith(ALLOWED_CMD_PREFIXES):
-        raise AgentError(f"Command not allow-listed: {cmd.split()[0]}")
+    parts = _validate_command(cmd, cwd)
     try:
-        proc = subprocess.run(shlex.split(cmd), cwd=cwd, capture_output=True,
+        proc = subprocess.run(parts, cwd=cwd, capture_output=True,
                               text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         raise AgentError(f"Command timed out after {timeout}s.") from None

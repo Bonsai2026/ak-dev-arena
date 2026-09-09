@@ -8,7 +8,7 @@ on:
 
 jobs:
   backend:
-    name: Backend (pytest)
+    name: Backend (pytest) — Linux
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,7 +21,7 @@ jobs:
         run: pytest backend/tests -q
 
   frontend:
-    name: Frontend (build)
+    name: Frontend (build) — Linux
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,3 +32,29 @@ jobs:
         run: npm install --prefix frontend
       - name: Build
         run: npm run build --prefix frontend
+
+  # PHASE A.5 — EARLY WINDOWS SMOKE: the desktop app is Windows-first, so we
+  # validate backend tests + frontend build + the Tauri shell on Windows on
+  # EVERY push, not at the end of the project.
+  windows:
+    name: Windows smoke (pytest + build + tauri check)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend deps
+        run: pip install -r backend/requirements.txt
+      - name: Backend tests (Windows)
+        run: pytest backend/tests -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Frontend build (Windows)
+        run: |
+          npm install --prefix frontend
+          npm run build --prefix frontend
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Tauri shell check (Windows)
+        run: cargo check --manifest-path src-tauri/Cargo.toml

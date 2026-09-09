@@ -1,12 +1,19 @@
 """Arena web tools (FreeBuff/Manus-style research): search + fetch.
 
 Search needs: pip install ddgs  (free, no API key). Fetch needs only httpx.
+
+Security: fetch is SSRF-guarded — private/loopback/link-local/metadata
+addresses are rejected so the AI can't reach your local network or cloud
+metadata endpoints from a user-supplied URL.
 """
 
 from __future__ import annotations
 
 import html
+import ipaddress
 import re
+import socket
+import urllib.parse
 
 
 class WebError(Exception):
@@ -14,6 +21,33 @@ class WebError(Exception):
 
 
 SEARCH_HINT = "Web search needs: pip install ddgs  (free, no API key)"
+
+
+def _assert_public_url(url: str) -> None:
+    """Reject URLs that resolve to private, loopback, link-local or reserved IPs."""
+    parsed = urllib.parse.urlsplit(url)
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        raise WebError("URL has no host.")
+    if host in ("localhost", "0.0.0.0") or host.endswith((".local", ".internal", ".lan")):
+        raise WebError("Fetching local/private addresses is not allowed.")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise WebError(f"Could not resolve host: {str(exc)[:160]}") from None
+    seen: set[str] = set()
+    for info in infos:
+        addr = info[4][0]
+        if addr in seen:
+            continue
+        seen.add(addr)
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            raise WebError("Fetching local/private addresses is not allowed.")
 
 
 def web_search(query: str, max_results: int = 5) -> list[dict[str, str]]:
@@ -40,6 +74,7 @@ def web_fetch(url: str, max_chars: int = 8000) -> dict[str, str]:
     url = (url or "").strip()
     if not url.startswith(("http://", "https://")):
         raise WebError("URL must start with http(s).")
+    _assert_public_url(url)
     import httpx
 
     try:

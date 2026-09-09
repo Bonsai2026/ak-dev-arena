@@ -1,20 +1,21 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AK Dev Arena",
+  "productName": "AK Dev Studio",
   "version": "1.2.0",
-  "identifier": "com.akdevarena.app",
+  "identifier": "com.akdevstudio.app",
   "build": {
+    "beforeDevCommand": "npm run dev --prefix ../frontend",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../frontend/dist"
   },
   "app": {
     "windows": [
       {
-        "title": "AK Dev Arena",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 900,
-        "minHeight": 600
+        "title": "AK Dev Studio",
+        "width": 1360,
+        "height": 860,
+        "minWidth": 1000,
+        "minHeight": 640
       }
     ],
     "security": {
@@ -23,7 +24,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb", "appimage", "nsis", "dmg"],
-    "icon": ["icons/128x128.png"]
+    "targets": ["deb", "appimage", "nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ]
   }
 }

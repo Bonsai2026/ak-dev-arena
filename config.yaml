@@ -6,6 +6,8 @@
 app_name: "AK Dev Arena"
 version: "1.2.0"
 
+# Bind only to loopback by default (safe). For LAN/preview expose with
+# ARENA_HOST=0.0.0.0 and list extra origins in ARENA_CORS_ORIGINS.
 server:
   host: "127.0.0.1"
   port: 8000

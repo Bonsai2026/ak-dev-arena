@@ -6,6 +6,7 @@ interface Props {
   streaming: boolean;
   ready: boolean;
   onSend: (text: string) => void;
+  onStop?: () => void;
   instructions?: InstructionsState | null;
 }
 
@@ -32,7 +33,7 @@ function renderContent(content: string, keyPrefix: string) {
   });
 }
 
-export default function Chat({ messages, streaming, ready, onSend, instructions }: Props) {
+export default function Chat({ messages, streaming, ready, onSend, onStop, instructions }: Props) {
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const hasInstructions = Boolean(instructions?.global_found || instructions?.project_found);
@@ -101,13 +102,23 @@ export default function Chat({ messages, streaming, ready, onSend, instructions 
             rows={2}
             className="flex-1 resize-none rounded-lg bg-zinc-900 border border-zinc-700 px-4 py-3 text-[15px] outline-none focus:border-indigo-500 placeholder:text-zinc-600"
           />
-          <button
-            onClick={send}
-            disabled={streaming || !ready || !input.trim()}
-            className="px-6 rounded-lg bg-indigo-600 font-semibold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-indigo-500"
-          >
-            {streaming ? "…" : "Send"}
-          </button>
+          {streaming ? (
+            <button
+              onClick={onStop}
+              className="px-6 rounded-lg bg-red-700 font-semibold hover:bg-red-600"
+              title="Stop the AI response"
+            >
+              ⏹ Stop
+            </button>
+          ) : (
+            <button
+              onClick={send}
+              disabled={!ready || !input.trim()}
+              className="px-6 rounded-lg bg-indigo-600 font-semibold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-indigo-500"
+            >
+              Send
+            </button>
+          )}
         </div>
       </div>
     </div>

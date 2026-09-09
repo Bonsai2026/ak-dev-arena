@@ -50,9 +50,11 @@ make setup
 #   pip install -r backend/requirements-optional.txt   # voice, web search, MCP, repo maps
 #   cd frontend && npm install && cd ..
 
-# 3. Start the backend (brain 🧠)
-make backend          # or: python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+# 3. Start the backend (brain 🧠) — binds 127.0.0.1 by default (safe)
+make backend          # or: python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 # → API docs at http://127.0.0.1:8000/docs
+# Only expose to LAN/preview when you need it:
+#   ARENA_HOST=0.0.0.0 make backend      (add ARENA_CORS_ORIGINS for extra origins)
 
 # 4. Start the frontend (face 😎) — in a new terminal
 make frontend         # or: cd frontend && npm run dev
@@ -69,7 +71,17 @@ make frontend         # or: cd frontend && npm run dev
 - Or via terminal: `export OPENAI_API_KEY=sk-...` (also `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, `GROQ_API_KEY`)
 - Or 100% local & free: install [Ollama](https://ollama.ai), run `ollama pull llama3.1`, pick the Ollama model in the app.
 
+**Windows first:** see [`docs/WINDOWS.md`](docs/WINDOWS.md) — one-click `start.bat`,
+Tauri shell (auto-starts the backend), and the smoke-test checklist. CI runs a
+Windows job (pytest + frontend build + Tauri check) on every push.
+
 **Voice mode extras (optional):** `pip install faster-whisper edge-tts`
+
+> **Security:** the backend binds `127.0.0.1` and CORS is allow-listed to the app's
+> own origins (no `*`). Web fetch rejects private/local addresses (SSRF guard),
+> the agent's shell is token allow-listed (no delete/install/push/metacharacters),
+> and git undo never destroys uncommitted user work (backup branch + dirty-tree
+> refusal). See `backend/tests/test_security.py`.
 
 ---
 
