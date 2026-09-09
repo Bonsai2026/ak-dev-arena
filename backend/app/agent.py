@@ -216,14 +216,15 @@ async def _dispatch(tool: str, args: dict[str, Any], work_dir: Path,
     if tool == "search":
         return json.dumps(files.search(args.get("q", ""), root=work_dir))[:4000]
     if tool == "run":
-        return run_command(args.get("cmd", ""), cwd=work_dir)
+        return await asyncio.to_thread(run_command, args.get("cmd", ""), work_dir)
     if tool in ("run_build", "run_tests"):
         project = projects.detect(work_dir)
         cmd = projects.build_cmd(project) if tool == "run_build" else projects.test_cmd(project)
         if not cmd:
             return (f"ERROR: no {tool.replace('run_', '')} command detected for this project "
                     f"(type={project['type']}, scripts={project['scripts'] or 'none'}).")
-        res = procman.run(cmd, work_dir, timeout=600, task_id=task_id)
+        # blocking subprocess must never stall the asyncio loop (UI polls break)
+        res = await asyncio.to_thread(procman.run, cmd, work_dir, 600, task_id)
         tail = ((res.get("stdout") or "") + "\n" + (res.get("stderr") or "")).strip()[-4000:]
         return f"exit={res['exit_code']} duration={res['duration']}s\n{tail}"
     if tool == "install_dependency":
@@ -237,7 +238,7 @@ async def _dispatch(tool: str, args: dict[str, Any], work_dir: Path,
             cmd = ["python", "-m", "pip", "install", pkg]
         else:
             return "ERROR: unsupported project type for install."
-        res = procman.run(cmd, work_dir, timeout=600, task_id=task_id)
+        res = await asyncio.to_thread(procman.run, cmd, work_dir, 600, task_id)
         tail = ((res.get("stdout") or "") + "\n" + (res.get("stderr") or "")).strip()[-3000:]
         return f"exit={res['exit_code']}\n{tail}"
     if tool == "start_server":
