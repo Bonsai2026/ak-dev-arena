@@ -1,5 +1,31 @@
 /* Typed client for the Arena backend (FastAPI sidecar). */
 
+// LAN auth: when the backend runs with ARENA_TOKEN set, every request must
+// carry it. Token sources (first wins): ?token=… in the URL (start.bat can
+// open the UI with it), then localStorage. The fetch shim below adds the
+// header to ALL api calls, including streaming.
+export const ARENA_TOKEN: string = (() => {
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get("token");
+    if (fromUrl) localStorage.setItem("arena.token", fromUrl);
+    return localStorage.getItem("arena.token") || "";
+  } catch {
+    return "";
+  }
+})();
+
+const _origFetch = window.fetch.bind(window);
+window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+  if (ARENA_TOKEN) {
+    const headers = new Headers(init?.headers);
+    if (!headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${ARENA_TOKEN}`);
+    }
+    init = { ...init, headers };
+  }
+  return _origFetch(input, init);
+};
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;

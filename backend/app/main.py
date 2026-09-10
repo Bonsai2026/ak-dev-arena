@@ -8,14 +8,15 @@ API docs:
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
 from typing import Any, Literal
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 # -------------------------------------------------------------------------
@@ -90,6 +91,32 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# LAN/shared-host protection: when ARENA_TOKEN is set, every /api call needs
+# `Authorization: Bearer <token>` (or X-Arena-Token). Loopback-only setups can
+# leave it unset and keep the zero-config flow. /api/health stays open so the
+# desktop shell / start.bat can still probe readiness.
+ARENA_TOKEN = os.environ.get("ARENA_TOKEN", "").strip()
+# Paths that never need the token (readiness probes, nothing sensitive).
+# (/health is outside /api/* so it's open anyway; /api/health kept as alias.)
+TOKEN_OPEN_PATHS = {"/api/health", "/health"}
+
+
+@app.middleware("http")
+async def _token_guard(request: Request, call_next):  # noqa: ANN001
+    if ARENA_TOKEN and request.url.path.startswith("/api/"):
+        if request.method != "OPTIONS" and request.url.path not in TOKEN_OPEN_PATHS:
+            header = request.headers.get("authorization", "")
+            provided = ""
+            if header.lower().startswith("bearer "):
+                provided = header.split(" ", 1)[1].strip()
+            provided = provided or request.headers.get("x-arena-token", "").strip()
+            if not hmac.compare_digest(provided, ARENA_TOKEN):
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Missing or wrong ARENA_TOKEN "
+                                       "(send 'Authorization: Bearer <token>')."})
+    return await call_next(request)
 
 COMPOSER_PROMPT = """You output multi-file patches as EXACTLY ONE JSON object, no other text:
 {"patches": [{"path": "relative/path", "old_text": "exact snippet to replace", "new_text": "replacement"}]}
