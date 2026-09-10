@@ -8,6 +8,7 @@ API docs:
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
@@ -111,6 +112,8 @@ async def _token_guard(request: Request, call_next):  # noqa: ANN001
             if header.lower().startswith("bearer "):
                 provided = header.split(" ", 1)[1].strip()
             provided = provided or request.headers.get("x-arena-token", "").strip()
+            # EventSource can't set headers → accept ?token= for SSE endpoints.
+            provided = provided or (request.query_params.get("token") or "").strip()
             if not hmac.compare_digest(provided, ARENA_TOKEN):
                 return JSONResponse(
                     status_code=401,
@@ -726,6 +729,46 @@ def api_agent_task_get(task_id: str) -> dict[str, Any]:
     if not state:
         raise HTTPException(status_code=404, detail="Task not found.")
     return state
+
+
+# Server-sent events: pushes the task state whenever it changes instead of the
+# UI polling every 1.2s. Closes itself once the task reaches a terminal state.
+_TERMINAL_AGENT = ("done", "failed", "cancelled", "timeout", "interrupted",
+                   "complete")
+
+
+@app.get("/api/agent/tasks/{task_id}/events")
+async def api_agent_task_events(task_id: str):
+    if not agent.get_task(task_id):
+        raise HTTPException(status_code=404, detail="Task not found.")
+
+    async def event_generator():
+        last = ""
+        idle = 0
+        while True:
+            state = agent.get_task(task_id)
+            if state is None:  # pruned/gone mid-stream
+                yield "data: {\"detail\":\"task gone\"}\n\n"
+                return
+            try:
+                blob = json.dumps(state, default=str)
+            except (TypeError, ValueError):
+                blob = json.dumps({"id": task_id, "status": state.get("status")})
+            if blob != last:
+                last = blob
+                yield f"data: {blob}\n\n"
+            if state.get("status") in _TERMINAL_AGENT:
+                return
+            await asyncio.sleep(0.35)
+            idle += 1
+            if idle % 40 == 0:  # ~14s keep-alive comment (no UI effect)
+                yield ": keep-alive\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.delete("/api/agent/tasks/{task_id}")

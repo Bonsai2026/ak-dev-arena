@@ -357,6 +357,13 @@ export async function getAgentTask(id: string): Promise<AgentTask> {
   return asJson(await fetch(`/api/agent/tasks/${id}`));
 }
 
+/** SSE stream URL for live task updates. EventSource can't set headers, so
+ *  the token (if any) rides as ?token= — the backend accepts it for SSE. */
+export function agentEventsUrl(id: string): string {
+  const qs = ARENA_TOKEN ? `?token=${encodeURIComponent(ARENA_TOKEN)}` : "";
+  return `/api/agent/tasks/${id}/events${qs}`;
+}
+
 export async function listAgentTasks(): Promise<AgentTask[]> {
   const res = await fetch("/api/agent/tasks");
   return ((await asJson(res)).tasks ?? []) as AgentTask[];

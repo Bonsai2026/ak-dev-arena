@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  agentEventsUrl,
   approveTool,
   cancelAgentTask,
   createAgentTask,
@@ -63,6 +64,7 @@ export default function Agent({ model }: Props) {
   const [pending, setPending] = useState<{ tool: string }[]>([]);
   const [error, setError] = useState("");
   const pollRef = useRef<number | null>(null);
+  const esRef = useRef<EventSource | null>(null);
   const [autoPlan, setAutoPlan] = useState(true);
 
   const running = taskState !== null && !TERMINAL.has(taskState.status);
@@ -74,6 +76,7 @@ export default function Agent({ model }: Props) {
 
   useEffect(() => () => {
     if (pollRef.current) window.clearInterval(pollRef.current);
+    if (esRef.current) esRef.current.close();
   }, []);
 
   const poll = async (id: string) => {
@@ -93,6 +96,38 @@ export default function Agent({ model }: Props) {
     }
   };
 
+  const closeStream = () => {
+    if (esRef.current) { esRef.current.close(); esRef.current = null; }
+  };
+
+  // Live updates via SSE; falls back to 1.2s polling if the stream fails.
+  const stream = (id: string) => {
+    closeStream();
+    if (pollRef.current) { window.clearInterval(pollRef.current); pollRef.current = null; }
+    try {
+      const es = new EventSource(agentEventsUrl(id));
+      esRef.current = es;
+      es.onmessage = (ev) => {
+        try {
+          const state = JSON.parse(ev.data) as AgentTask;
+          if ((state as unknown as { detail?: string }).detail) return; // task gone
+          setTaskState(state);
+          if (TERMINAL.has(state.status)) {
+            closeStream();
+            setError(state.error || "");
+            getPending().then(setPending).catch(() => {});
+          }
+        } catch { /* ignore malformed frame */ }
+      };
+      es.onerror = () => {
+        closeStream();
+        if (!pollRef.current) pollRef.current = window.setInterval(() => poll(id), 1200);
+      };
+    } catch {
+      pollRef.current = window.setInterval(() => poll(id), 1200);
+    }
+  };
+
   const go = async () => {
     if (!taskText.trim() || running) return;
     setError("");
@@ -105,8 +140,7 @@ export default function Agent({ model }: Props) {
       }
       const state = await createAgentTask(taskText.trim(), model, maxSteps, profile);
       setTaskState(state);
-      if (pollRef.current) window.clearInterval(pollRef.current);
-      pollRef.current = window.setInterval(() => poll(state.id), 1200);
+      stream(state.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Agent run failed");
     }
