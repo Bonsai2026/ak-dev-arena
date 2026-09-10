@@ -39,7 +39,7 @@ advertised as done without evidence in this repo (tests + recorded runs).
 | Manager / Team | Implemented (optional) | remains optional by design — single agent is the main UX |
 | Review | Implemented | same as before, plus `git diff` evidence |
 | Voice | Partial | STT/TTS optional deps; Whisper now cached (singleton); engines not installed in sandbox (2 tests skipped) |
-| Desktop (Tauri 2 shell) | Working | shell + icons + launcher committed; cargo check runs in Windows CI; local Rust check not run in this sandbox |
+| Desktop (Tauri 2 shell) | Working | shell + icons + launcher committed; `cargo check` PASSES in Windows CI (run 34518594983, 2026-09-10); local Rust check not run in this sandbox |
 
 ## Providers
 
@@ -72,7 +72,7 @@ advertised as done without evidence in this repo (tests + recorded runs).
 | 3 | Git safety | Verified (safe undo suite) |
 | 4 | Cancellation | Verified (task + process) |
 | 5 | Provider failure | Verified (401/500 friendly errors) |
-| 6 | Desktop recovery | Working — Windows CI job (`cargo check` + pytest + build) + `start.bat`; full acceptance on a Windows PC |
+| 6 | Desktop recovery | Working — Windows CI job GREEN (pytest 132/132 + frontend build + `cargo check`) + `start.bat`; full acceptance on a Windows PC |
 | 7 | Resource test | Verified (tracking, port cleanup, workspace cleanup) |
 
 ## Not implemented (honest list)
