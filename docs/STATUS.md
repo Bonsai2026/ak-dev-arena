@@ -28,6 +28,17 @@ advertised as done without evidence in this repo (tests + recorded runs).
 | Report with evidence | Verified | `docs/STATUS.md` + agent verification object in task API/UI |
 | Upgrade notes from audit | Implemented | P0 list (CORS `*`→allowlist, SSRF guard, tokenized command allowlist, safe git undo) all fixed + tested in `test_security.py` |
 
+## Post-audit additions (user-approved pass, 2026-09-10)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Persistence (tasks + run jobs survive restart) | Verified | `store.py` atomic snapshot → `.akdev/state/ak_state.json`, restored on startup; mid-flight entries honestly `interrupted`; `test_persistence.py` (7 tests) |
+| Live agent streaming (SSE) | Verified | `GET /api/agent/tasks/{id}/events` pushes state on change, closes at terminal; UI uses EventSource with polling fallback; `test_agent_stream.py` |
+| LAN auth token (`ARENA_TOKEN`) | Verified | bearer/X-Arena-Token/?token= accepted; /health open; loopback default zero-config; `test_lan_auth.py` |
+| Windows installer (NSIS) | Working | `installer.yml` (v* tags/dispatch) via tauri-action; test build run on tag v1.3.0-rc.1 — result recorded below when finished |
+| Real browser E2E in CI | Verified | job "Browser E2E (Playwright, real Chromium)" green (run 34528139621) |
+| Dependency pinning | Implemented | `backend/requirements.txt` pinned to the CI-verified versions |
+
 ## Modes
 
 | Mode | Status | Notes |

@@ -41,4 +41,4 @@ Live status with evidence: [`docs/STATUS.md`](docs/STATUS.md).
 | **D.5** Acceptance harness | 7 mandatory benchmarks as automated tests, real-provider E2E agent test, final status report | this pass |
 | **E** Full Windows acceptance | on a real Windows PC: `start.bat` → app opens → Agent task runs → build/test/serve → desktop recovery (close=no orphans, reopen=healthy) | pending (needs Windows HW) |
 
-Current test status: **129 passed, 2 skipped** (voice engines optional), frontend production build green.
+Current test status: **144 passed, 2 skipped** (browser tests skip without Chromium), frontend production build green; CI green on Linux + Windows + real-Chromium browser job.
