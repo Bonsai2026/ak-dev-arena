@@ -39,6 +39,18 @@ advertised as done without evidence in this repo (tests + recorded runs).
 | Real browser E2E in CI | Verified | job "Browser E2E (Playwright, real Chromium)" green (run 34528139621) |
 | Dependency pinning | Implemented | `backend/requirements.txt` pinned to the CI-verified versions |
 
+## User-approved batch 2 (2026-09-10/11)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Diff review + 1-click undo | Verified | before-snapshots + unified diffs + conflict-guarded revert; `test_diff_review.py` (5 tests); Agent.tsx review panel |
+| Live preview panel | Working | Build → serve shows in-app iframe + "Verify in real browser" (Playwright report card) |
+| Task continuation | Verified | `POST /api/agent/tasks/{id}/continue` carries goal/outcome/files context in same workspace; `test_followup_rules.py` |
+| .akrules project memory | Verified | injected into every task (capped 4KB); unit-tested |
+| Auto-commit (verified-only) | Verified | commits ONLY when done + tests=pass; refuses unverified; `test_followup_rules.py` git-repo tests |
+| Desktop notifications | Implemented | browser Notification API on terminal status (best-effort) |
+| GitHub Release automation | Working | installer.yml: v* tag → draft release with NSIS .exe attached (tauri-action) |
+
 ## Modes
 
 | Mode | Status | Notes |

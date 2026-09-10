@@ -9,8 +9,9 @@ import {
   getRunJob,
   getWorkspace,
   runJob,
+  browserInspect,
 } from "../api";
-import type { BuildInfo, RunAction, RunJob, Template, WorkspaceInfo } from "../api";
+import type { BrowserReport, BuildInfo, RunAction, RunJob, Template, WorkspaceInfo } from "../api";
 
 interface Props {
   model: string;
@@ -45,6 +46,8 @@ export default function Build({ model }: Props) {
   const [job, setJob] = useState<RunJob | null>(null);
   const [wsInfo, setWsInfo] = useState<WorkspaceInfo | null>(null);
   const [cleaning, setCleaning] = useState(false);
+  const [browserReport, setBrowserReport] = useState<BrowserReport | null>(null);
+  const [verifying, setVerifying] = useState(false);
   const pollRef = useRef<number | null>(null);
 
   const running = job !== null && !RUN_TERMINAL.has(job.status);
@@ -222,6 +225,39 @@ export default function Build({ model }: Props) {
               <div className="text-xs text-emerald-400 mb-2">
                 🔗 <a href={job.url} target="_blank" rel="noreferrer" className="underline">{job.url}</a>
                 {job.pid && <span className="text-zinc-600"> · pid {job.pid}</span>}
+              </div>
+            )}
+            {/* Live preview: the running dev server, inside the app */}
+            {job.action === "serve" && job.status === "serving" && job.url && (
+              <div className="mb-2">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="text-xs font-semibold text-zinc-300">👁 Live preview</span>
+                  <button
+                    onClick={async () => {
+                      if (!job.url) return;
+                      setVerifying(true); setBrowserReport(null);
+                      try { setBrowserReport(await browserInspect(job.url)); }
+                      catch (e) { setMsg(e instanceof Error ? e.message : "Browser verify failed"); }
+                      finally { setVerifying(false); }
+                    }}
+                    disabled={verifying}
+                    className="ml-auto text-[11px] px-2 py-0.5 rounded border border-indigo-800 text-indigo-300 hover:bg-indigo-950/50 disabled:opacity-40"
+                  >{verifying ? "verifying…" : "🔍 Verify in real browser"}</button>
+                </div>
+                <iframe src={job.url} title="preview" className="w-full h-64 rounded border border-zinc-800 bg-white" />
+                {browserReport && (
+                  <div className="mt-1.5 text-[11px] space-y-0.5">
+                    <div className={browserReport.has_errors ? "text-amber-300" : "text-emerald-400"}>
+                      {browserReport.has_errors ? "⚠ Loaded with issues" : "✅ Loaded clean"} · HTTP {browserReport.status_code ?? "?"} · "{browserReport.title}"
+                    </div>
+                    {browserReport.console_errors.length > 0 && (
+                      <div className="text-red-400">console errors: {browserReport.console_errors.slice(0, 3).join(" | ")}</div>
+                    )}
+                    {browserReport.failed_requests.length > 0 && (
+                      <div className="text-red-400">failed requests: {browserReport.failed_requests.length}</div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
             {job.error && <div className="text-xs text-red-400 mb-2">⚠️ {job.error}</div>}

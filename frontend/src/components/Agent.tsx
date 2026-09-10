@@ -3,6 +3,7 @@ import {
   agentEventsUrl,
   approveTool,
   cancelAgentTask,
+  continueAgentTask,
   createAgentTask,
   getAgentChanges,
   getAgentTask,
@@ -71,6 +72,8 @@ export default function Agent({ model }: Props) {
   const [changes, setChanges] = useState<FileChange[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
+  const [autoCommit, setAutoCommit] = useState(false);
+  const [followUp, setFollowUp] = useState("");
 
   const running = taskState !== null && !TERMINAL.has(taskState.status);
 
@@ -100,12 +103,23 @@ export default function Agent({ model }: Props) {
         pollRef.current = null;
         setError(state.error || "");
         getPending().then(setPending).catch(() => {});
+        notifyDone(state);
       }
     } catch (e) {
       if (pollRef.current) window.clearInterval(pollRef.current);
       pollRef.current = null;
       setError(e instanceof Error ? e.message : "Task lookup failed");
     }
+  };
+
+  const notifyDone = (state: AgentTask) => {
+    try {
+      if (document.hidden && Notification.permission === "granted") {
+        new Notification("AK Dev Studio", {
+          body: `Task ${state.status.toUpperCase()}: ${state.task.slice(0, 80)}`,
+        });
+      }
+    } catch { /* notifications are best-effort */ }
   };
 
   const closeStream = () => {
@@ -128,6 +142,7 @@ export default function Agent({ model }: Props) {
             closeStream();
             setError(state.error || "");
             getPending().then(setPending).catch(() => {});
+            notifyDone(state);
           }
         } catch { /* ignore malformed frame */ }
       };
@@ -153,9 +168,10 @@ export default function Agent({ model }: Props) {
         const res = await planTask(taskText.trim(), model);
         setPlan(res.plan ?? []);
       }
-      const state = await createAgentTask(taskText.trim(), model, maxSteps, profile);
+      const state = await createAgentTask(taskText.trim(), model, maxSteps, profile, autoCommit);
       setTaskState(state);
       stream(state.id);
+      try { if (Notification.permission === "default") Notification.requestPermission(); } catch { /* ignore */ }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Agent run failed");
     }
@@ -168,6 +184,20 @@ export default function Agent({ model }: Props) {
       await poll(taskState.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Cancel failed");
+    }
+  };
+
+  const doContinue = async () => {
+    if (!taskState || !followUp.trim()) return;
+    setError(""); setMsg("");
+    try {
+      const state = await continueAgentTask(taskState.id, followUp.trim(), model, maxSteps);
+      setFollowUp("");
+      setTaskState(state);
+      setChanges([]); setExpanded(null);
+      stream(state.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Follow-up failed");
     }
   };
 
@@ -267,6 +297,10 @@ export default function Agent({ model }: Props) {
             <input type="checkbox" checked={autoPlan} onChange={(e) => setAutoPlan(e.target.checked)} />
             auto-plan first
           </label>
+          <label className="flex items-center gap-1.5 text-xs text-zinc-500" title="Git-commit automatically ONLY if the task finishes verified (tests pass)">
+            <input type="checkbox" checked={autoCommit} onChange={(e) => setAutoCommit(e.target.checked)} />
+            auto-commit if verified
+          </label>
         </div>
         {error && <div className="mt-2 text-sm text-red-400">⚠️ {error}</div>}
         {msg && <div className="mt-2 text-sm text-emerald-400">✅ {msg}</div>}
@@ -302,13 +336,37 @@ export default function Agent({ model }: Props) {
                   : "Planning…"
                 : taskState.summary || taskState.error}
             </span>
-            {taskState.finished && (
+            {taskState.finished && taskState.started && (
               <span className="text-[11px] text-zinc-600">
-                {(taskState.finished - taskState.started!) / 1000 < 60
-                  ? `${Math.round((taskState.finished - taskState.started!) / 1000)}s`
-                  : `${Math.round((taskState.finished - taskState.started!) / 60000)}m`}
+                {taskState.finished - taskState.started < 60
+                  ? `${Math.round(taskState.finished - taskState.started)}s`
+                  : `${Math.round((taskState.finished - taskState.started) / 60)}m`}
               </span>
             )}
+            {taskState.auto_committed && (
+              <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-950/60 border border-emerald-800 text-emerald-300" title="Auto-committed after verified run">
+                ⎇ {String(taskState.auto_committed)}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Follow-up: keep working in the same workspace after a finished task */}
+        {taskState && TERMINAL.has(taskState.status) && !running && (
+          <div className="rounded-lg border border-indigo-900 bg-indigo-950/20 p-2.5 flex items-center gap-2">
+            <span className="text-lg">↪</span>
+            <input
+              value={followUp}
+              onChange={(e) => setFollowUp(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") doContinue(); }}
+              placeholder="Follow-up in this same workspace… (e.g. 'now add tests for it')"
+              className="flex-1 bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-indigo-700"
+            />
+            <button
+              onClick={doContinue}
+              disabled={!followUp.trim()}
+              className="text-xs px-3 py-1.5 rounded bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 font-semibold"
+            >Continue</button>
           </div>
         )}
 

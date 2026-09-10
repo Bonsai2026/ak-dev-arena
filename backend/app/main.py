@@ -179,6 +179,13 @@ class AgentRequest(BaseModel):
     model: str = Field(default="", max_length=200)
     max_steps: int = Field(default=8, ge=1, le=25)
     profile: str = Field(default="coder", max_length=20)
+    auto_commit: bool = False  # commit ONLY if task finishes verified
+
+
+class ContinueRequest(BaseModel):
+    follow_up: str = Field(min_length=1, max_length=20_000)
+    model: str = Field(default="", max_length=200)
+    max_steps: int = Field(default=8, ge=1, le=25)
 
 
 class PlanRequest(BaseModel):
@@ -713,9 +720,20 @@ async def api_agent_run(body: AgentRequest) -> dict[str, Any]:
 async def api_agent_task_create(body: AgentRequest) -> dict[str, Any]:
     model = body.model or _default_model("agent")
     task_state = agent.create_task(body.task, model, body.max_steps,
-                                   profile=body.profile or "coder")
+                                   profile=body.profile or "coder",
+                                   auto_commit=body.auto_commit)
     log.info("agent task started id=%s profile=%s", task_state["id"], body.profile or "coder")
     return task_state
+
+
+@app.post("/api/agent/tasks/{task_id}/continue")
+async def api_agent_task_continue(task_id: str, body: ContinueRequest) -> dict[str, Any]:
+    model = body.model or _default_model("agent")
+    try:
+        return agent.continue_task(task_id, body.follow_up, model=model,
+                                   max_steps=body.max_steps)
+    except agent.AgentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/api/agent/tasks")

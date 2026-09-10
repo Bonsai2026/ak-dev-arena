@@ -325,7 +325,10 @@ export interface AgentTask {
   task: string;
   model: string;
   profile: string;
-  status: "queued" | "running" | "complete" | "done" | "failed" | "cancelled" | "timeout";
+  status: "queued" | "running" | "complete" | "done" | "failed" | "cancelled" | "timeout" | "interrupted";
+  auto_committed?: string | boolean;
+  auto_commit_error?: string;
+  rules_loaded?: boolean;
   created: number;
   started: number | null;
   finished: number | null;
@@ -348,9 +351,22 @@ export async function createAgentTask(
   task: string,
   model: string,
   max_steps: number,
-  profile = "coder"
+  profile = "coder",
+  auto_commit = false
 ): Promise<AgentTask> {
-  return post("/api/agent/tasks", { task, model, max_steps, profile });
+  return post("/api/agent/tasks", { task, model, max_steps, profile, auto_commit });
+}
+
+/** Follow-up on a finished task ("ab isme X bhi karo"). */
+export async function continueAgentTask(
+  id: string,
+  followUp: string,
+  model: string,
+  maxSteps = 8
+): Promise<AgentTask> {
+  return post(`/api/agent/tasks/${id}/continue`, {
+    follow_up: followUp, model, max_steps: maxSteps,
+  });
 }
 
 export async function getAgentTask(id: string): Promise<AgentTask> {

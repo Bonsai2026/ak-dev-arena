@@ -36,7 +36,11 @@ jobs:
         with:
           projectPath: src-tauri
           args: --bundles nsis
-          tagName: ""
+          # v* tag → GitHub Release with the installer attached;
+          # manual dispatch → build-only (no release).
+          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          releaseDraft: true
 
       # tauri-action only uploads to a release when tagName is set — so we
       # upload the installer as a plain run artifact ourselves.

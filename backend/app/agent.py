@@ -173,6 +173,23 @@ _running_servers: dict[str, str] = {}  # task_id -> proc id (one server per task
 _VERIFICATION_TOOLS = {"run_build", "run_tests", "start_server", "git_checkpoint", "git_revert"}
 
 
+# ------------------------------------------------------- project rules -----
+
+_RULES_CAP = 4000
+
+
+def _load_rules(work_dir: Path) -> str:
+    """Project memory: `.akrules` in the workspace is injected into every
+    task (best-effort, capped, silently skipped when absent)."""
+    try:
+        p = Path(work_dir) / ".akrules"
+        if p.is_file():
+            return p.read_text(encoding="utf-8", errors="replace")[:_RULES_CAP]
+    except OSError:
+        pass
+    return ""
+
+
 def default_permissions() -> dict[str, str]:
     perms = {t: "allow" for t in TOOL_DOCS if t != "done"}
     # dangerous-by-default tools request approval unless explicitly allowed
@@ -682,11 +699,32 @@ def _prune_tasks() -> None:
         _TASKS.pop(s["id"], None)
 
 
+def _maybe_auto_commit(state: dict[str, Any], work_dir: Path) -> None:
+    """Optional auto-commit — ONLY when the task genuinely finished AND its
+    tests were verified passing (never commit unverified work)."""
+    if not (state.get("_auto_commit") and state["status"] == "done"
+            and (state.get("verification") or {}).get("tests") == "pass"):
+        return
+    try:
+        from . import gitops  # noqa: PLC0415
+        res = gitops.checkpoint(
+            root=work_dir,
+            message=f"arena: auto-commit after verified task {state['id']}")
+        state["auto_committed"] = res.get("hash") or True
+    except Exception as exc:  # noqa: BLE001 — commit failure ≠ task failure
+        state["auto_commit_error"] = str(exc)[:200]
+
+
 async def _task_runner(state: dict[str, Any], task: str, model: str,
                        max_steps: int, profile: str, work_dir: Path) -> None:
     cancel: asyncio.Event = state["_cancel"]
     state["status"] = "running"
     state["started"] = time.time()
+    # Project memory: .akrules rides along with every task.
+    rules = _load_rules(work_dir)
+    if rules.strip():
+        state["rules_loaded"] = True
+        task = f"Project rules (.akrules):\n{rules}\n\nTask: {task}"
     # Step 1 — plan (goals + todos), best-effort
     try:
         plan = await plan_task(task, model, work_dir=work_dir)
@@ -743,11 +781,13 @@ async def _task_runner(state: dict[str, Any], task: str, model: str,
         state["finished"] = time.time()
         state["current"] = None
         state["status"] = state["status"] if state["status"] != "running" else "failed"
+        _maybe_auto_commit(state, work_dir)
         store.save_state()  # persist terminal state (best-effort)
 
 
 def create_task(task: str, model: str, max_steps: int = 8,
-                profile: str = "coder", work_dir: Path | None = None) -> dict[str, Any]:
+                profile: str = "coder", work_dir: Path | None = None,
+                auto_commit: bool = False) -> dict[str, Any]:
     tid = uuid.uuid4().hex[:8]
     state: dict[str, Any] = {
         "id": tid, "task": task, "model": model, "profile": profile,
@@ -755,6 +795,7 @@ def create_task(task: str, model: str, max_steps: int = 8,
         "steps": [], "current": None, "summary": "", "error": "",
         "verification": None, "criteria": [], "plan": [], "files": [],
         "_cancel": asyncio.Event(),
+        "_auto_commit": bool(auto_commit),
     }
     _TASKS[tid] = state
     base = (work_dir or files.WORKSPACE).resolve()
@@ -765,6 +806,30 @@ def create_task(task: str, model: str, max_steps: int = 8,
     _prune_tasks()
     store.save_state()  # persist creation (best-effort)
     return _task_public(state)
+
+
+def continue_task(task_id: str, follow_up: str, model: str | None = None,
+                  max_steps: int | None = None) -> dict[str, Any]:
+    """Follow-up on a finished task: the new task carries the previous task's
+    goal, outcome and touched files as context, in the SAME work dir."""
+    src = _TASKS.get(task_id)
+    if not src:
+        raise AgentError("Task not found.")
+    if src.get("status") not in ("done", "failed", "cancelled", "timeout",
+                                 "interrupted"):
+        raise AgentError("Task is still running — stop it first.")
+    files_note = ", ".join(src.get("files", [])[:10]) or "none recorded"
+    prompt = (
+        "Follow-up on a previous task in this same workspace.\n"
+        f"Previous task: {src.get('task', '')}\n"
+        f"Previous outcome: {src.get('status')} — {str(src.get('summary', ''))[:400]}\n"
+        f"Files previously involved: {files_note}\n\n"
+        f"New request: {follow_up}"
+    )
+    work_dir = Path(src.get("_work_dir") or files.WORKSPACE)
+    return create_task(prompt, model or src.get("model") or "",
+                       max_steps or 8, profile=src.get("profile", "coder"),
+                       work_dir=work_dir)
 
 
 def get_task(task_id: str) -> dict[str, Any] | None:
