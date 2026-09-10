@@ -23,7 +23,7 @@ const RUN_LABEL: Record<RunAction, string> = {
   test: "🧪 Test",
   serve: "🚀 Serve",
 };
-const RUN_TERMINAL = new Set(["passed", "failed", "cancelled", "stopped"]);
+const RUN_TERMINAL = new Set(["passed", "failed", "cancelled", "stopped", "interrupted"]);
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;

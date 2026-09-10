@@ -28,7 +28,7 @@ from typing import Any, Callable
 
 from . import config as config_mod
 from . import (browser, contextx, files, gitops, llm, mcp_client, procman,
-               profiles, projects, todos, web)
+               profiles, projects, store, todos, web)
 
 BASE_SYSTEM = """You are the AK Dev Studio agent — an AI engineer working on the user's PC.
 Solve the task step by step, using tools to inspect, edit, build and test.
@@ -649,6 +649,7 @@ async def _task_runner(state: dict[str, Any], task: str, model: str,
         state["finished"] = time.time()
         state["current"] = None
         state["status"] = state["status"] if state["status"] != "running" else "failed"
+        store.save_state()  # persist terminal state (best-effort)
 
 
 def create_task(task: str, model: str, max_steps: int = 8,
@@ -667,6 +668,7 @@ def create_task(task: str, model: str, max_steps: int = 8,
     state["_task"] = asyncio.get_running_loop().create_task(
         _task_runner(state, task, model, max_steps, profile, base))
     _prune_tasks()
+    store.save_state()  # persist creation (best-effort)
     return _task_public(state)
 
 
@@ -682,7 +684,8 @@ def list_tasks() -> list[dict[str, Any]]:
 
 def cancel_task(task_id: str) -> bool:
     state = _TASKS.get(task_id)
-    if not state or state["status"] in ("done", "failed", "cancelled", "timeout"):
+    if not state or state["status"] in ("done", "failed", "cancelled", "timeout",
+                                        "interrupted"):
         return False
     state["_cancel"].set()
     return True
@@ -691,8 +694,16 @@ def cancel_task(task_id: str) -> bool:
 def reset_tasks_for_tests() -> None:
     for state in list(_TASKS.values()):
         task = state.get("_task")
-        if task:
-            task.cancel()
-        state["_cancel"].set()
+        try:
+            if task is not None and hasattr(task, "cancel"):
+                task.cancel()
+        except Exception:  # noqa: BLE001, S110 — restored/legacy entries
+            pass
+        ev = state.get("_cancel")
+        if ev is not None:
+            try:
+                ev.set()
+            except Exception:  # noqa: BLE001, S110 — restored/legacy entries
+                pass
         procman.stop_all_for_task(state.get("id", ""))
     _TASKS.clear()

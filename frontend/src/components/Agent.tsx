@@ -47,9 +47,10 @@ const STATUS_BADGE: Record<string, string> = {
   failed: "text-red-400 border-red-800",
   cancelled: "text-amber-400 border-amber-800",
   timeout: "text-amber-400 border-amber-800",
+  interrupted: "text-orange-400 border-orange-800",
 };
 
-const TERMINAL = new Set(["complete", "done", "failed", "cancelled", "timeout"]);
+const TERMINAL = new Set(["complete", "done", "failed", "cancelled", "timeout", "interrupted"]);
 
 export default function Agent({ model }: Props) {
   const [profiles, setProfiles] = useState<Profile[]>([]);

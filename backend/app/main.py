@@ -46,6 +46,7 @@ from . import (
     profiles,
     review,
     slash,
+    store,
     todos,
     usage,
     vault,
@@ -56,6 +57,17 @@ from . import (
 )
 
 app = FastAPI(title="AK Dev Studio", version=__version__)
+
+
+@app.on_event("startup")
+def _restore_persisted_state() -> None:
+    """Bring back agent tasks + run-job history from the last session.
+    Anything that was mid-flight is honestly marked 'interrupted'."""
+    try:
+        store.restore_state()
+    except Exception:  # noqa: BLE001, S110 — persistence must never break boot
+        pass
+
 
 # Security: only the app's own UI origins may call the API. Override for extra
 # origins (e.g. a LAN/Tauri build) via ARENA_CORS_ORIGINS="a,b,c".

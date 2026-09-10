@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from . import files, procman, projects
+from . import files, procman, projects, store
 
 _jobs: dict[str, dict[str, Any]] = {}
 _TASKS: dict[str, asyncio.Task] = {}
@@ -99,6 +99,7 @@ async def _runner(job: dict[str, Any]) -> None:
         job["output"] = str(exc)
     finally:
         job["finished"] = time.time()
+        store.save_state()  # persist terminal state (best-effort)
 
 
 def start(action: str, path: str = "", root: Path | None = None,
@@ -135,6 +136,7 @@ def start(action: str, path: str = "", root: Path | None = None,
     _jobs[job_id] = job
     _TASKS[job_id] = asyncio.get_running_loop().create_task(_runner(job))
     _prune()
+    store.save_state()  # persist creation (best-effort)
     return _public(job)
 
 
@@ -149,7 +151,8 @@ def list_jobs() -> list[dict[str, Any]]:
 
 def cancel(job_id: str) -> bool:
     job = _jobs.get(job_id)
-    if not job or job["status"] in ("passed", "failed", "cancelled"):
+    if not job or job["status"] in ("passed", "failed", "cancelled",
+                                    "interrupted", "stopped"):
         return False
     if job["status"] == "serving" and job.get("proc_id"):
         procman.stop(job["proc_id"])
