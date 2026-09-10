@@ -51,10 +51,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      # NOTE: `npm --prefix` is unreliable on Windows (script cwd stays at the
+      # repo root → tsc not found), so use working-directory instead.
       - name: Frontend build (Windows)
+        working-directory: frontend
         run: |
-          npm install --prefix frontend
-          npm run build --prefix frontend
+          npm install
+          npm run build
       - uses: dtolnay/rust-toolchain@stable
       - name: Tauri shell check (Windows)
         run: cargo check --manifest-path src-tauri/Cargo.toml
