@@ -103,15 +103,21 @@ def test_run_test_job_node_progresses(ws, monkeypatch):
 
 
 def test_run_serve_then_stop(ws):
+    import socket
+    import sys
     # static project → no dev cmd → ExecError (no fake serving)
     with pytest.raises(execjobs.ExecError):
         execjobs.start("serve", str(ws))
-    # node project with dev script → serve job → stop (tracked, no orphan)
-    (ws / "package.json").write_text('{"scripts": {"dev": "sh -c \\"sleep 300\\""}}')
+    # node project whose dev script REALLY binds a port → serving → stop
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    (ws / "package.json").write_text(
+        '{"scripts": {"dev": "sh -c \\"%s -m http.server %d\\""}}' % (sys.executable, port))
     execjobs.reset_for_tests()
 
     async def _go():
-        job = execjobs.start("serve", str(ws))
+        job = execjobs.start("serve", str(ws), port=port)
         for _ in range(100):
             state = execjobs.get(job["id"])
             if state["status"] in ("serving", "failed", "cancelled"):
@@ -120,14 +126,17 @@ def test_run_serve_then_stop(ws):
         return execjobs.get(job["id"])
 
     state = asyncio.run(_go())
-    if state["status"] == "serving":
-        assert state["url"] and state["pid"]
-        assert execjobs.cancel(state["id"]) is True
-        assert execjobs.get(state["id"])["status"] == "stopped"
-    else:
-        # npm unavailable in this environment → clean failure with evidence
-        assert state["status"] == "failed"
-        assert state.get("error") or state.get("output")
+    assert state["status"] == "serving", state  # port actually opened — no fake
+    assert state["url"] and state["pid"]
+    assert procman.is_port_open(port) is True
+    assert execjobs.cancel(state["id"]) is True
+    assert execjobs.get(state["id"])["status"] == "stopped"
+    for _ in range(40):  # tree-killed children → port freed
+        if not procman.is_port_open(port):
+            break
+        import time
+        time.sleep(0.1)
+    assert procman.is_port_open(port) is False  # no orphan
 
 
 # ------------------------------------------------------ browser inspect ---

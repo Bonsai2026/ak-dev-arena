@@ -12,6 +12,8 @@ No shell is ever used: commands are token lists (no injection).
 
 from __future__ import annotations
 
+import os
+import signal
 import socket
 import subprocess
 import time
@@ -44,9 +46,40 @@ def is_port_open(port: int, host: str = "127.0.0.1") -> bool:
         return s.connect_ex((host, port)) == 0
 
 
+def _popen_kwargs() -> dict[str, Any]:
+    """Every tracked process gets its own session/group so stopping it also
+    kills its whole subtree (npm → sh → python) — no orphans."""
+    if os.name == "posix":
+        return {"start_new_session": True}
+    return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}  # win32
+
+
+def _kill_tree(proc: subprocess.Popen, force: bool = False,
+               pgid: int | None = None) -> None:
+    """Terminate the WHOLE process group (POSIX) or tree (Windows).
+
+    pgid is captured at spawn: after the leader exits, os.getpgid() is no
+    longer possible, but the group (and its children) may still be alive.
+    """
+    try:
+        if os.name == "posix":
+            sig = signal.SIGKILL if force else signal.SIGTERM
+            os.killpg(pgid if pgid is not None else os.getpgid(proc.pid), sig)
+        else:
+            flags = "/F" if force else ""
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", flags],
+                           capture_output=True, timeout=15, check=False)
+    except (ProcessLookupError, PermissionError):
+        pass  # already dead
+
+
 def _record(proc: subprocess.Popen, command: list[str], cwd: Path,
             task_id: str | None, port: int | None) -> dict[str, Any]:
     pid = proc.pid
+    try:
+        pgid = os.getpgid(pid) if os.name == "posix" else None
+    except (ProcessLookupError, PermissionError):
+        pgid = None
     entry: dict[str, Any] = {
         "id": f"p{uuid.uuid4().hex[:8]}",
         "pid": pid,
@@ -58,6 +91,7 @@ def _record(proc: subprocess.Popen, command: list[str], cwd: Path,
         "started": time.time(),
         "status": "running",
         "proc": proc,
+        "_pgid": pgid,
     }
     _procs[entry["id"]] = entry
     return entry
@@ -74,7 +108,7 @@ def run(command: list[str], cwd: Path, timeout: int = TIMEOUT_DEFAULT,
     try:
         proc = subprocess.Popen(
             command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, shell=False,
+            text=True, shell=False, **_popen_kwargs(),
         )
     except FileNotFoundError as exc:
         raise ProcError(f"Executable not found: {command[0]}") from None
@@ -82,7 +116,7 @@ def run(command: list[str], cwd: Path, timeout: int = TIMEOUT_DEFAULT,
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        _kill_tree(proc, force=True)
         out, err = proc.communicate()
         entry["status"] = "timeout"
         duration = round(time.time() - started, 2)
@@ -111,7 +145,7 @@ def start(command: list[str], cwd: Path, task_id: str | None = None,
     try:
         proc = subprocess.Popen(
             command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, shell=False, bufsize=1,
+            text=True, shell=False, bufsize=1, **_popen_kwargs(),
         )
     except FileNotFoundError as exc:
         raise ProcError(f"Executable not found: {command[0]}") from None
@@ -124,15 +158,18 @@ def stop(proc_id: str) -> bool:
     if not entry or entry["status"] != "running":
         return False
     proc: subprocess.Popen = entry["proc"]
+    pgid = entry.get("_pgid")
     try:
         proc.terminate()
         try:
             proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            _kill_tree(proc, force=True, pgid=pgid)
             proc.wait(timeout=3)
     except Exception:  # noqa: BLE001, S110 — already dead
         pass
+    # Parent may have exited but left children — sweep the whole tree.
+    _kill_tree(proc, force=True, pgid=pgid)
     entry["status"] = "stopped"
     return True
 
@@ -151,6 +188,11 @@ def stop_all_for_task(task_id: str) -> int:
             if stop(entry["id"]):
                 n += 1
     return n
+
+
+def get(proc_id: str) -> dict[str, Any] | None:
+    entry = _procs.get(proc_id)
+    return _public(entry) if entry else None
 
 
 def list_processes() -> list[dict[str, Any]]:

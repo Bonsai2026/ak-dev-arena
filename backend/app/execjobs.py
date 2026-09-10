@@ -68,8 +68,20 @@ async def _runner(job: dict[str, Any]) -> None:
             job["proc_id"] = info["id"]
             job["port"] = info.get("port") or job.get("port")
             job["url"] = projects.browser_url(job["port"]) if job["port"] else None
-            job["status"] = "serving"
-            job["output"] = f"Server running: pid={info['pid']} url={job['url']}"
+            # No fake "serving": the port must actually answer within 15s.
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                if procman.is_port_open(job["port"]):
+                    job["status"] = "serving"
+                    job["output"] = f"Server running: pid={info['pid']} url={job['url']}"
+                    return
+                if procman.get(info["id"]) is None:
+                    break  # process already exited
+                await asyncio.sleep(0.25)
+            procman.stop(info["id"])
+            job["status"] = "failed"
+            job["output"] = (job.get("output") or "") + f"\nPort {job['port']} never opened — server failed to start."
+            job["error"] = f"Server not reachable on port {job['port']}."
             return
         res = await asyncio.to_thread(procman.run, cmd, job["_cwd"],
                                       timeout=job.get("timeout", 600), task_id=job["id"])

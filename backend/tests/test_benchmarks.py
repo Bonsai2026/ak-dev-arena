@@ -204,3 +204,23 @@ def test_b7_orphans_are_tracked_and_cleaned(tmp_path, monkeypatch):
     b7 = [p for p in procman.list_processes() if p["task_id"] == "task-b7"]
     assert b7 and all(p["status"] != "running" for p in b7)
     assert procman.is_port_open(port) is False  # port freed
+
+
+def test_b7_process_tree_killed_no_orphan(tmp_path, monkeypatch):
+    """npm-like wrapper (sh → server child): stopping the tracked process must
+    kill the WHOLE tree — the port has to close (found via live smoke)."""
+    monkeypatch.setattr(files, "WORKSPACE", tmp_path)
+    procman.reset_for_tests()
+    port = procman.find_free_port()
+    procman.start(["sh", "-c", f"{sys.executable} -m http.server {port}"],
+                  tmp_path, port=port, task_id="tree")
+    for _ in range(60):
+        if procman.is_port_open(port):
+            break
+        time.sleep(0.05)
+    assert procman.is_port_open(port) is True
+    procs = procman.list_processes()
+    target = next(p for p in procs if p["task_id"] == "tree")
+    assert procman.stop(target["id"]) is True
+    time.sleep(0.5)
+    assert procman.is_port_open(port) is False  # child server died with parent
