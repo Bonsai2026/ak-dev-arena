@@ -43,7 +43,7 @@ def test_b1_node_project_build_and_test(tmp_path, monkeypatch):
 
     async def _go(action):
         job = execjobs.start(action, str(tmp_path))
-        for _ in range(600):  # ~30s budget: npm startup is slow on Windows
+        for _ in range(1800):  # ~90s budget: npm startup is slow on Windows
             state = execjobs.get(job["id"])
             if state["status"] in ("passed", "failed", "cancelled", "stopped"):
                 return state
