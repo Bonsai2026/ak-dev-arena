@@ -233,7 +233,7 @@ async def _dispatch(tool: str, args: dict[str, Any], work_dir: Path,
             return "ERROR: invalid package name."
         project = projects.detect(work_dir)
         if project["type"] == "node":
-            cmd = ["npm", "install", pkg]
+            cmd = [projects.npm_executable(), "install", pkg]
         elif project["type"] == "python":
             cmd = ["python", "-m", "pip", "install", pkg]
         else:

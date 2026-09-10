@@ -89,7 +89,7 @@ def test_run_test_job_node_progresses(ws, monkeypatch):
 
     async def _go():
         job = execjobs.start("test", str(ws))
-        for _ in range(100):
+        for _ in range(600):  # ~30s budget: npm startup is slow on Windows
             state = execjobs.get(job["id"])
             if state["status"] in ("passed", "failed", "cancelled"):
                 return state
@@ -123,7 +123,7 @@ def test_run_serve_then_stop(ws):
 
     async def _go():
         job = execjobs.start("serve", str(ws), port=port)
-        for _ in range(100):
+        for _ in range(600):  # ~30s budget: npm startup is slow on Windows
             state = execjobs.get(job["id"])
             if state["status"] in ("serving", "failed", "cancelled"):
                 break

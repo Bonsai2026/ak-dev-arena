@@ -8,10 +8,17 @@ deliberately small — one detect() + per-adapter command builders.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
 from . import files
+
+
+def npm_executable() -> str:
+    """Full path to npm. On Windows npm is a shim (npm.cmd) that CreateProcess
+    cannot resolve from bare 'npm', so we must resolve it via PATH ourselves."""
+    return shutil.which("npm") or "npm"
 
 
 def detect(root) -> dict[str, Any]:
@@ -54,7 +61,7 @@ def _node_frameworks(scripts: dict[str, str]) -> list[str]:
 
 def install_cmd(project) -> list[str]:
     if project["type"] == "node":
-        return ["npm", "install"]
+        return [npm_executable(), "install"]
     if project["type"] == "python":
         return ["python", "-m", "pip", "install", "-r", "requirements.txt"]
     return []
@@ -63,7 +70,7 @@ def install_cmd(project) -> list[str]:
 def build_cmd(project) -> list[str] | None:
     if project["type"] == "node":
         if "build" in project["scripts"]:
-            return ["npm", "run", "build"]
+            return [npm_executable(), "run", "build"]
         return None
     return None  # python build varies (no universal default)
 
@@ -71,7 +78,7 @@ def build_cmd(project) -> list[str] | None:
 def test_cmd(project) -> list[str] | None:
     if project["type"] == "node":
         if "test" in project["scripts"]:
-            return ["npm", "test"]
+            return [npm_executable(), "test"]
         return None
     if project["type"] == "python":
         return ["python", "-m", "pytest", "-q"]
@@ -83,10 +90,10 @@ def dev_cmd(project, port: int) -> list[str] | None:
         if "dev" in project["scripts"]:
             script = project["scripts"]["dev"]
             if "vite" in script or "next" in script:
-                return ["npm", "run", "dev", "--", "--port", str(port)]
-            return ["npm", "run", "dev"]
+                return [npm_executable(), "run", "dev", "--", "--port", str(port)]
+            return [npm_executable(), "run", "dev"]
         if "start" in project["scripts"]:
-            return ["npm", "run", "start", "--", "--port", str(port)]
+            return [npm_executable(), "run", "start", "--", "--port", str(port)]
         return None
     return None
 

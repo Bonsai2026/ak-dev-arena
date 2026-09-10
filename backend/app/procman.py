@@ -66,9 +66,10 @@ def _kill_tree(proc: subprocess.Popen, force: bool = False,
             sig = signal.SIGKILL if force else signal.SIGTERM
             os.killpg(pgid if pgid is not None else os.getpgid(proc.pid), sig)
         else:
-            flags = "/F" if force else ""
-            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", flags],
-                           capture_output=True, timeout=15, check=False)
+            cmd = ["taskkill", "/PID", str(proc.pid), "/T"]
+            if force:
+                cmd.append("/F")
+            subprocess.run(cmd, capture_output=True, timeout=15, check=False)
     except (ProcessLookupError, PermissionError):
         pass  # already dead
 
@@ -160,12 +161,20 @@ def stop(proc_id: str) -> bool:
     proc: subprocess.Popen = entry["proc"]
     pgid = entry.get("_pgid")
     try:
-        proc.terminate()
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
+        if os.name != "posix":
+            # win32: taskkill /T must run while the LEADER is still alive,
+            # otherwise the child tree can't be found — so force-kill the
+            # whole tree up front (graceful WM_CLOSE is unreliable for
+            # console processes anyway).
             _kill_tree(proc, force=True, pgid=pgid)
-            proc.wait(timeout=3)
+            proc.wait(timeout=5)
+        else:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                _kill_tree(proc, force=True, pgid=pgid)
+                proc.wait(timeout=3)
     except Exception:  # noqa: BLE001, S110 — already dead
         pass
     # Parent may have exited but left children — sweep the whole tree.

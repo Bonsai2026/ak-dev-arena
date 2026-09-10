@@ -25,18 +25,25 @@ from backend.app import agent, catalog, execjobs, files, procman
 # -------------------------------------------- B1: real node build/test ----
 
 
+def _node_e(js: str) -> str:
+    """`node -e "<js>"` that survives BOTH shells npm uses: sh (POSIX) and
+    cmd.exe (Windows). cmd has no single quotes, so we escape \\" as \\\\"
+    — cmd turns that into a literal quote, sh passes the backslash through."""
+    return 'node -e "%s"' % js.replace('"', '\\"')
+
+
 def test_b1_node_project_build_and_test(tmp_path, monkeypatch):
     monkeypatch.setattr(files, "WORKSPACE", tmp_path)
     (tmp_path / "package.json").write_text(json.dumps({
         "name": "task-app",
-        "scripts": {"build": "node -e \"require('fs').writeFileSync('built.txt','ok')\"",
-                    "test": "node -e \"require('fs').existsSync('built.txt') ? process.exit(0) : process.exit(1)\""},
+        "scripts": {"build": _node_e("require('fs').writeFileSync('built.txt','ok')"),
+                    "test": _node_e("process.exit(require('fs').existsSync('built.txt')?0:1)")},
         "devDependencies": {},
     }))
 
     async def _go(action):
         job = execjobs.start(action, str(tmp_path))
-        for _ in range(150):
+        for _ in range(600):  # ~30s budget: npm startup is slow on Windows
             state = execjobs.get(job["id"])
             if state["status"] in ("passed", "failed", "cancelled", "stopped"):
                 return state
@@ -59,7 +66,7 @@ SCRIPT_FIX = [
     '{"thought":"run","tool":"run_tests","args":{}}',
     '{"thought":"inspect","tool":"read_file","args":{"path":"package.json"}}',
     '{"thought":"fix","tool":"write_file","args":{"path":"package.json",'
-    '"content":"{\\"scripts\\":{\\"test\\":\\"node -e \\\\\\"process.exit(0)\\\\\\"\\"}}"}}',
+    '"content":"{\\"scripts\\":{\\"test\\":\\"echo fixed\\"}}"}}',
     '{"thought":"retest","tool":"run_tests","args":{}}',
     '{"thought":"verify","tool":"done","args":{"summary":"fixed and verified",'
     '"verification":[["tests pass after fix","pass"]]}}',
@@ -93,7 +100,7 @@ def test_b2_error_recovery_loop(tmp_path, monkeypatch):
     """Failing test → agent inspects & edits file → retest passes → verified."""
     monkeypatch.setattr(files, "WORKSPACE", tmp_path)
     (tmp_path / "package.json").write_text(json.dumps({
-        "scripts": {"test": "node -e \"process.exit(1)\""}}))  # starts BROKEN
+        "scripts": {"test": "exit 1"}}))  # starts BROKEN (sh + cmd both)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _FixHandler)
     server._idx = 0  # type: ignore[attr-defined]
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -107,7 +114,7 @@ def test_b2_error_recovery_loop(tmp_path, monkeypatch):
         async def _go():
             task = agent.create_task("make tests pass", "mockai/m", max_steps=8,
                                      work_dir=tmp_path)
-            for _ in range(300):
+            for _ in range(1200):  # ~60s budget: several npm runs on Windows
                 state = agent.get_task(task["id"])
                 if state and state["status"] in ("done", "failed", "cancelled", "timeout"):
                     return state

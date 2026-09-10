@@ -178,16 +178,17 @@ def test_run_build_npm(ws, monkeypatch):
     project = projects.detect(ws)
     assert project["type"] == "node"
     assert project["frameworks"] == []
-    assert projects.build_cmd(project) == ["npm", "run", "build"]
-    assert projects.test_cmd(project) == ["npm", "test"]
+    npm = projects.npm_executable()
+    assert projects.build_cmd(project) == [npm, "run", "build"]
+    assert projects.test_cmd(project) == [npm, "test"]
     # non-vite dev script: no --port flag
-    assert projects.dev_cmd(project, 5000) == ["npm", "run", "dev"]
+    assert projects.dev_cmd(project, 5000) == [npm, "run", "dev"]
     # vite-style dev script gets the port flag
     (ws / "package.json").write_text(json.dumps(
         {"scripts": {"dev": "vite"}}))
     project2 = projects.detect(ws)
     assert "vite" in project2["frameworks"]
-    assert projects.dev_cmd(project2, 5000) == ["npm", "run", "dev", "--", "--port", "5000"]
+    assert projects.dev_cmd(project2, 5000) == [npm, "run", "dev", "--", "--port", "5000"]
 
 
 def test_procman_run_and_stop(ws):
