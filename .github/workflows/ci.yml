@@ -33,6 +33,25 @@ jobs:
       - name: Build
         run: npm run build --prefix frontend
 
+  # REAL browser E2E: installs Playwright + a real Chromium, serves a live
+  # page and verifies load/click/fill/console/network capture end-to-end.
+  browser:
+    name: Browser E2E (Playwright, real Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: |
+          pip install -r backend/requirements.txt
+          pip install playwright
+      - name: Install Chromium
+        run: python -m playwright install chromium --with-deps
+      - name: Live browser tests
+        run: pytest backend/tests/test_browser_live.py -v
+
   # PHASE A.5 — EARLY WINDOWS SMOKE: the desktop app is Windows-first, so we
   # validate backend tests + frontend build + the Tauri shell on Windows on
   # EVERY push, not at the end of the project.
