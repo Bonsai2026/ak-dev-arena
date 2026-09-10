@@ -35,7 +35,7 @@ advertised as done without evidence in this repo (tests + recorded runs).
 | Persistence (tasks + run jobs survive restart) | Verified | `store.py` atomic snapshot → `.akdev/state/ak_state.json`, restored on startup; mid-flight entries honestly `interrupted`; `test_persistence.py` (7 tests) |
 | Live agent streaming (SSE) | Verified | `GET /api/agent/tasks/{id}/events` pushes state on change, closes at terminal; UI uses EventSource with polling fallback; `test_agent_stream.py` |
 | LAN auth token (`ARENA_TOKEN`) | Verified | bearer/X-Arena-Token/?token= accepted; /health open; loopback default zero-config; `test_lan_auth.py` |
-| Windows installer (NSIS) | Working | `installer.yml` (v* tags/dispatch) via tauri-action; test build run on tag v1.3.0-rc.1 — result recorded below when finished |
+| Windows installer (NSIS) | Verified | `installer.yml` (v* tags/dispatch) via tauri-action; live test build (run 34529574333) green — real NSIS artifact `ak-dev-studio-windows-installer` (1.9 MB .exe) uploaded; test tags cleaned up afterwards |
 | Real browser E2E in CI | Verified | job "Browser E2E (Playwright, real Chromium)" green (run 34528139621) |
 | Dependency pinning | Implemented | `backend/requirements.txt` pinned to the CI-verified versions |
 
