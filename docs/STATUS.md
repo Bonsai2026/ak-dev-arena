@@ -24,7 +24,7 @@ advertised as done without evidence in this repo (tests + recorded runs).
 | Process tracking (PID/port/cmd/cwd/start/parent/status) + orphan cleanup | Verified | `test_benchmarks.py::test_b7` — port opened, process visible, stop frees port; `procman.orphans()` |
 | Resource awareness (usage, cleanup, limits) | Verified | `/api/workspace` + `workspacex.cleanup` (never touches user files), `test_phase_c.py` |
 | Real build/test/serve/install | Verified | `test_benchmarks.py::test_b1` — real npm-style node build → artifact → test sees artifact |
-| Real browser testing (load/click/fill/console/network) | Partial | `browser.py` is REAL Playwright code; Chromium download blocked by sandbox network → clean install hint verified; live browser run pending on user's PC |
+| Real browser testing (load/click/fill/console/network) | Verified | REAL Chromium in CI: job "Browser E2E (Playwright, real Chromium)" green (run 34528139621) — live page served, click/fill/text ran, console error + failed request captured (`test_browser_live.py`) |
 | Report with evidence | Verified | `docs/STATUS.md` + agent verification object in task API/UI |
 | Upgrade notes from audit | Implemented | P0 list (CORS `*`→allowlist, SSRF guard, tokenized command allowlist, safe git undo) all fixed + tested in `test_security.py` |
 
