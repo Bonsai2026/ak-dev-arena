@@ -357,6 +357,23 @@ export async function getAgentTask(id: string): Promise<AgentTask> {
   return asJson(await fetch(`/api/agent/tasks/${id}`));
 }
 
+export interface FileChange {
+  path: string;
+  status: "added" | "modified" | "deleted";
+  additions: number;
+  deletions: number;
+  diff: string;
+}
+
+export async function getAgentChanges(id: string): Promise<FileChange[]> {
+  const res = await fetch(`/api/agent/tasks/${id}/changes`);
+  return ((await asJson(res)).changes ?? []) as FileChange[];
+}
+
+export async function revertAgentChange(id: string, path: string): Promise<{ action: string }> {
+  return post(`/api/agent/tasks/${id}/changes/revert`, { path });
+}
+
 /** SSE stream URL for live task updates. EventSource can't set headers, so
  *  the token (if any) rides as ?token= — the backend accepts it for SSE. */
 export function agentEventsUrl(id: string): string {

@@ -4,12 +4,14 @@ import {
   approveTool,
   cancelAgentTask,
   createAgentTask,
+  getAgentChanges,
   getAgentTask,
   getPending,
   getProfiles,
   planTask,
+  revertAgentChange,
 } from "../api";
-import type { AgentTask, Profile } from "../api";
+import type { AgentTask, FileChange, Profile } from "../api";
 
 interface Props {
   model: string;
@@ -66,6 +68,9 @@ export default function Agent({ model }: Props) {
   const pollRef = useRef<number | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const [autoPlan, setAutoPlan] = useState(true);
+  const [changes, setChanges] = useState<FileChange[]>([]);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [msg, setMsg] = useState("");
 
   const running = taskState !== null && !TERMINAL.has(taskState.status);
 
@@ -78,6 +83,13 @@ export default function Agent({ model }: Props) {
     if (pollRef.current) window.clearInterval(pollRef.current);
     if (esRef.current) esRef.current.close();
   }, []);
+
+  // Load the agent's file changes (diff review) — refresh on progress.
+  useEffect(() => {
+    if (!taskState) { setChanges([]); return; }
+    const id = taskState.id;
+    getAgentChanges(id).then(setChanges).catch(() => {});
+  }, [taskState?.id, taskState?.status, taskState?.steps?.length]);
 
   const poll = async (id: string) => {
     try {
@@ -131,8 +143,11 @@ export default function Agent({ model }: Props) {
   const go = async () => {
     if (!taskText.trim() || running) return;
     setError("");
+    setMsg("");
     setTaskState(null);
     setPlan([]);
+    setChanges([]);
+    setExpanded(null);
     try {
       if (autoPlan) {
         const res = await planTask(taskText.trim(), model);
@@ -254,6 +269,7 @@ export default function Agent({ model }: Props) {
           </label>
         </div>
         {error && <div className="mt-2 text-sm text-red-400">⚠️ {error}</div>}
+        {msg && <div className="mt-2 text-sm text-emerald-400">✅ {msg}</div>}
         {pending.length > 0 && (
           <div className="mt-2 flex items-center gap-2 text-sm flex-wrap">
             <span className="text-amber-400">⏳ Needs approval:</span>
@@ -339,6 +355,56 @@ export default function Agent({ model }: Props) {
                 <code key={i} className="text-xs px-2 py-0.5 rounded bg-zinc-800 text-indigo-300">{f}</code>
               ))}
             </div>
+          </div>
+        )}
+
+        {changes.length > 0 && (
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3 text-sm">
+            <div className="font-semibold mb-2">🔍 Change review <span className="text-zinc-500 font-normal text-xs">— diff + 1-click undo (session-only)</span></div>
+            {changes.map((c) => (
+              <div key={c.path} className="mb-2 border border-zinc-800 rounded-md overflow-hidden">
+                <div className="flex items-center gap-2 px-2 py-1.5 bg-zinc-900">
+                  <span className={
+                    c.status === "added" ? "text-emerald-400" :
+                    c.status === "deleted" ? "text-red-400" : "text-amber-300"
+                  }>{c.status === "added" ? "＋" : c.status === "deleted" ? "－" : "✎"}</span>
+                  <code className="text-xs text-indigo-300 flex-1 truncate">{c.path}</code>
+                  <span className="text-[11px] text-emerald-400">+{c.additions}</span>
+                  <span className="text-[11px] text-red-400">−{c.deletions}</span>
+                  <button
+                    className="text-[11px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                    onClick={() => setExpanded(expanded === c.path ? null : c.path)}
+                  >{expanded === c.path ? "hide diff" : "diff"}</button>
+                  <button
+                    className="text-[11px] px-2 py-0.5 rounded border border-amber-900 text-amber-300 hover:bg-amber-950/40 disabled:opacity-40"
+                    disabled={running}
+                    title={running ? "Wait for the task to finish before reverting" : "Undo this change"}
+                    onClick={async () => {
+                      if (!taskState || !confirm(`Revert ${c.path} to its before-state?`)) return;
+                      try {
+                        const res = await revertAgentChange(taskState.id, c.path);
+                        setChanges((prev) => prev.filter((x) => x.path !== c.path));
+                        setError("");
+                        setMsg(`Reverted ${c.path} — ${res.action}`);
+                      } catch (e) {
+                        setError(e instanceof Error ? e.message : "Revert failed");
+                      }
+                    }}
+                  >↩ undo</button>
+                </div>
+                {expanded === c.path && (
+                  <pre className="text-[11px] leading-4 p-2 overflow-auto max-h-64 bg-black/40 whitespace-pre">{
+                    c.diff.split("\n").map((l, i) => (
+                      <div key={i} className={
+                        l.startsWith("+") ? "text-emerald-400" :
+                        l.startsWith("-") ? "text-red-400" :
+                        l.startsWith("@@") ? "text-indigo-300" : "text-zinc-500"
+                      }>{l || " "}</div>
+                    ))
+                  }</pre>
+                )}
+              </div>
+            ))}
           </div>
         )}
 

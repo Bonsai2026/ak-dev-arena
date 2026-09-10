@@ -83,6 +83,90 @@ class AgentError(Exception):
     """User-friendly agent failure (safe to show in UI)."""
 
 
+# ------------------------------------------------- file-change tracking ----
+# Every agent write/edit/delete is recorded WITH ITS BEFORE-SNAPSHOT so the
+# UI can show a diff and revert a single change. In-memory by design (the
+# snapshot belongs to the live session); never advertised as persisted undo.
+_SNAPSHOT_CAP = 200_000  # chars per file we're willing to remember
+_MAX_TRACKED = 200       # files per task (runaway guard)
+
+
+def _safe_before(path: str, work_dir: Path) -> str | None:
+    try:
+        content = files.read_file(path, root=work_dir)["content"]
+        return content if len(content) <= _SNAPSHOT_CAP else None
+    except Exception:  # noqa: BLE001 — missing/binary/huge → no before
+        return None
+
+
+def _record_change(task_id: str | None, path: str, before: str | None,
+                   after: str | None) -> None:
+    state = _TASKS.get(task_id or "")
+    if state is None or not path:
+        return
+    changes: dict[str, dict[str, Any]] = state.setdefault("_file_changes", {})
+    if len(changes) >= _MAX_TRACKED and path not in changes:
+        return
+    entry = changes.get(path)
+    if entry is None:
+        changes[path] = {"before": before, "after": after}
+    else:
+        entry["after"] = after  # keep the ORIGINAL before → clean revert
+
+
+def task_changes(task_id: str) -> list[dict[str, Any]]:
+    """Diff evidence for every file the agent touched in this task."""
+    state = _TASKS.get(task_id)
+    if not state:
+        return []
+    out: list[dict[str, Any]] = []
+    for path, ch in state.get("_file_changes", {}).items():
+        before, after = ch.get("before"), ch.get("after")
+        status = ("deleted" if after is None
+                  else "added" if before is None else "modified")
+        diff = files.make_diff(path, before or "", after or "")
+        lines = diff.splitlines()
+        out.append({
+            "path": path,
+            "status": status,
+            "additions": sum(1 for l in lines
+                             if l.startswith("+") and not l.startswith("+++")),
+            "deletions": sum(1 for l in lines
+                             if l.startswith("-") and not l.startswith("---")),
+            "diff": diff[:8000],
+        })
+    return sorted(out, key=lambda c: c["path"])
+
+
+def revert_change(task_id: str, path: str) -> dict[str, Any]:
+    """Restore the before-snapshot of ONE agent change — with a conflict guard:
+    if the file changed since the agent wrote it, we refuse (safety first)."""
+    state = _TASKS.get(task_id)
+    if not state:
+        raise AgentError("Task not found.")
+    entry = state.get("_file_changes", {}).get(path)
+    if not entry:
+        raise AgentError("No recorded change for this file.")
+    base = Path(state.get("_work_dir") or files.WORKSPACE)
+    current = None
+    try:
+        current = files.read_file(path, root=base)["content"]
+    except Exception:  # noqa: BLE001 — file absent
+        current = None
+    if current != entry.get("after"):
+        raise AgentError(
+            "File changed since the agent wrote it — revert skipped (safety).")
+    if entry["before"] is None:
+        files.delete_file(path, root=base)
+        action = "deleted (was added by agent)"
+    else:
+        files.write_file(path, entry["before"], root=base)
+        action = "restored to before-state"
+    # File is back to its pre-agent state → nothing left to show/revert.
+    state["_file_changes"].pop(path, None)
+    return {"path": path, "action": action}
+
+
 ASK_LOG: list[dict[str, Any]] = []
 APPROVALS: dict[str, float] = {}  # tool -> expiry timestamp
 _running_servers: dict[str, str] = {}  # task_id -> proc id (one server per task)
@@ -204,14 +288,24 @@ async def _dispatch(tool: str, args: dict[str, Any], work_dir: Path,
     if tool == "read_file":
         return files.read_file(args.get("path", ""), root=work_dir)["content"][:4000]
     if tool == "write_file":
-        res = files.write_file(args.get("path", ""), args.get("content", ""), root=work_dir)
+        rel = args.get("path", "")
+        before = _safe_before(rel, work_dir)
+        res = files.write_file(rel, args.get("content", ""), root=work_dir)
+        _record_change(task_id, res["path"], before, args.get("content", ""))
         return f"Wrote {res['path']} ({res['bytes']} bytes)."
     if tool == "edit_file":
-        res = files.apply_edit(args.get("path", ""), args.get("old_text", ""),
+        rel = args.get("path", "")
+        before = _safe_before(rel, work_dir)
+        res = files.apply_edit(rel, args.get("old_text", ""),
                                args.get("new_text", ""), root=work_dir)
+        after = _safe_before(res["path"], work_dir)
+        _record_change(task_id, res["path"], before, after)
         return f"Edited {res['path']}.\n{res['diff']}"[:4000]
     if tool == "delete_file":
-        res = files.delete_file(args.get("path", ""), root=work_dir)
+        rel = args.get("path", "")
+        before = _safe_before(rel, work_dir)
+        res = files.delete_file(rel, root=work_dir)
+        _record_change(task_id, rel, before, None)
         return f"Deleted {res['path']}."
     if tool == "search":
         return json.dumps(files.search(args.get("q", ""), root=work_dir))[:4000]
@@ -665,6 +759,7 @@ def create_task(task: str, model: str, max_steps: int = 8,
     _TASKS[tid] = state
     base = (work_dir or files.WORKSPACE).resolve()
     base.mkdir(parents=True, exist_ok=True)
+    state["_work_dir"] = str(base)
     state["_task"] = asyncio.get_running_loop().create_task(
         _task_runner(state, task, model, max_steps, profile, base))
     _prune_tasks()

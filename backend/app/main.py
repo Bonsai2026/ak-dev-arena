@@ -780,6 +780,26 @@ def api_agent_task_cancel(task_id: str) -> dict[str, Any]:
     return {"id": task_id, "cancelled": cancelled, "status": state["status"]}
 
 
+# Diff review + 1-click undo for every file the agent touched.
+class RevertRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=500)
+
+
+@app.get("/api/agent/tasks/{task_id}/changes")
+def api_agent_task_changes(task_id: str) -> dict[str, Any]:
+    if not agent.get_task(task_id):
+        raise HTTPException(status_code=404, detail="Task not found.")
+    return {"changes": agent.task_changes(task_id)}
+
+
+@app.post("/api/agent/tasks/{task_id}/changes/revert")
+def api_agent_task_revert(task_id: str, body: RevertRequest) -> dict[str, Any]:
+    try:
+        return agent.revert_change(task_id, body.path)
+    except agent.AgentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @app.post("/api/agent/plan")
 async def api_agent_plan(body: PlanRequest) -> dict[str, Any]:
     model = body.model or _default_model("agent")
