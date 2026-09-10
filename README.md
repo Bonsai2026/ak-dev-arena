@@ -100,7 +100,7 @@ ak-dev-arena/
 │   ├── app/            #   main.py (API) · llm.py · vault.py · config.py
 │   │                   #   files.py · gitops.py · agent.py · manager.py
 │   │                   #   builder.py · review.py · voice.py · usage.py
-│   └── tests/          #   79 pytest tests (run in CI)
+│   └── tests/          #   132 pytest tests (run in CI)
 ├── frontend/           # React + Vite + Tailwind — the face (7 modes + ⌘K palette)
 ├── src-tauri/          # Tauri desktop shell (native packaging — needs Rust stable)
 ├── workspace/          # AI playground (git-ignored, created on first run)

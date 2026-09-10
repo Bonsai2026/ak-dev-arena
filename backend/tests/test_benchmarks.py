@@ -207,12 +207,18 @@ def test_b7_orphans_are_tracked_and_cleaned(tmp_path, monkeypatch):
 
 
 def test_b7_process_tree_killed_no_orphan(tmp_path, monkeypatch):
-    """npm-like wrapper (sh → server child): stopping the tracked process must
-    kill the WHOLE tree — the port has to close (found via live smoke)."""
+    """npm-like wrapper (parent → server child): stopping the tracked process
+    must kill the WHOLE tree — the port has to close (found via live smoke).
+    The wrapper is python (not `sh -c`) so it also works on Windows."""
     monkeypatch.setattr(files, "WORKSPACE", tmp_path)
     procman.reset_for_tests()
     port = procman.find_free_port()
-    procman.start(["sh", "-c", f"{sys.executable} -m http.server {port}"],
+    wrapper = (
+        "import subprocess, sys; "
+        f"p = subprocess.Popen([sys.executable, '-m', 'http.server', '{port}']); "
+        "p.wait()"
+    )
+    procman.start([sys.executable, "-c", wrapper],
                   tmp_path, port=port, task_id="tree")
     for _ in range(60):
         if procman.is_port_open(port):

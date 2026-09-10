@@ -108,12 +108,17 @@ def test_run_serve_then_stop(ws):
     # static project → no dev cmd → ExecError (no fake serving)
     with pytest.raises(execjobs.ExecError):
         execjobs.start("serve", str(ws))
-    # node project whose dev script REALLY binds a port → serving → stop
+    # node project whose dev script REALLY binds a port → serving → stop.
+    # The script must work via npm on both POSIX (sh) and Windows (cmd), so
+    # we json-encode it (escapes Windows backslashes in sys.executable).
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
+    import json
+    exe = sys.executable
+    script = '"%s" -m http.server %d' % (exe, port)
     (ws / "package.json").write_text(
-        '{"scripts": {"dev": "sh -c \\"%s -m http.server %d\\""}}' % (sys.executable, port))
+        json.dumps({"scripts": {"dev": script}}))
     execjobs.reset_for_tests()
 
     async def _go():
