@@ -218,6 +218,7 @@ def resolve_call(model_id: str, provider: str) -> dict[str, Any]:
 
     Returns {litellm_model, api_base|None}. Strategy (OpenCode-style):
     - bare id (no slash) → pass through, LiteLLM infers the provider.
+    - custom provider → OpenAI-compatible via its normalized base URL.
     - known LiteLLM prefix → direct "provider/rest".
     - provider with api base → OpenAI-compatible via that base URL.
     - otherwise → direct attempt; LiteLLM's own registry may still know it.
@@ -230,9 +231,152 @@ def resolve_call(model_id: str, provider: str) -> dict[str, Any]:
     first = first.lower()
     if first == "ollama":
         return {"litellm_model": mid, "api_base": OLLAMA_BASE}
+    custom = get_custom_provider(first)
+    if custom and custom["base_url"]:
+        return {"litellm_model": f"openai/{rest}",
+                "api_base": normalize_base_url(custom["base_url"])}
     if first in LITELLM_PREFIXES:
         return {"litellm_model": mid, "api_base": None}
     entry = get_provider(first)
     if entry and entry.get("api"):
-        return {"litellm_model": f"openai/{rest}", "api_base": entry["api"]}
+        return {"litellm_model": f"openai/{rest}",
+                "api_base": normalize_base_url(entry["api"])}
     return {"litellm_model": mid, "api_base": None}
+
+
+def cost_for(model_id: str) -> tuple[float, float]:
+    """Per-1M-token (input, output) cost from the registry. (0,0) if unknown."""
+    mid = (model_id or "").strip()
+    first, rest = mid.split("/", 1) if "/" in mid else (mid, mid)
+    for pid, p in load().get("providers", {}).items():
+        if pid != first:
+            continue
+        m = (p.get("models") or {}).get(rest)
+        if m:
+            cost = m.get("cost") or {}
+            try:
+                return float(cost.get("input", 0) or 0), float(cost.get("output", 0) or 0)
+            except (TypeError, ValueError):
+                return 0.0, 0.0
+    return 0.0, 0.0
+
+
+# ========================================================================
+# Custom providers (OpenAI-compatible) — persisted in config.local.yaml.
+# ========================================================================
+
+def normalize_base_url(url: str) -> str:
+    """Normalize a user-supplied base URL. Never double /v1, no trailing /."""
+    url = (url or "").strip().rstrip("/")
+    if not url:
+        return url
+    if "://" not in url:
+        url = "https://" + url
+    # collapse accidental duplicates like /v1/v1
+    for bad in ("/v1/v1/chat/completions", "/v1/v1"):
+        if url.endswith(bad):
+            url = url[: -len(bad)] + bad.replace("/v1/v1", "/v1")
+    return url.rstrip("/")
+
+
+def _local_config() -> dict[str, Any]:
+    import os
+    from pathlib import Path as _P
+
+    from .config import REPO_ROOT as _ROOT
+
+    override = os.environ.get("ARENA_LOCAL_CONFIG")
+    path = _P(override) if override else _ROOT / "config.local.yaml"
+    if not path.exists():
+        return {}
+    try:
+        import yaml
+        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001 — corrupt local config → empty
+        return {}
+
+
+def _save_local(data: dict[str, Any]) -> None:
+    import os
+    from pathlib import Path as _P
+
+    from .config import REPO_ROOT as _ROOT
+
+    override = os.environ.get("ARENA_LOCAL_CONFIG")
+    path = _P(override) if override else _ROOT / "config.local.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    import yaml
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def upsert_custom_provider(provider_id: str, name: str = "", base_url: str = "",
+                           model: str = "") -> dict[str, Any]:
+    pid = (provider_id or "").strip().lower()
+    if not pid or not base_url.strip():
+        raise CatalogError("Provider id + base URL are required.")
+    if not base_url.startswith(("http://", "https://")):
+        raise CatalogError("Base URL must start with http(s)://")
+    data = _local_config()
+    entries = [e for e in (data.get("custom_providers") or [])
+               if not (isinstance(e, dict) and str(e.get("id", "")).lower() == pid)]
+    entries.append({"id": pid, "name": name.strip() or pid,
+                    "base_url": normalize_base_url(base_url),
+                    "model": model.strip()})
+    data["custom_providers"] = entries
+    _save_local(data)
+    clear_custom_cache()
+    return {"id": pid, "name": name.strip() or pid, "base_url": normalize_base_url(base_url),
+            "model": model.strip()}
+
+
+def remove_custom_provider(provider_id: str) -> bool:
+    pid = (provider_id or "").strip().lower()
+    data = _local_config()
+    entries = data.get("custom_providers") or []
+    kept = [e for e in entries if not (isinstance(e, dict) and str(e.get("id", "")).lower() == pid)]
+    if len(kept) == len(entries):
+        return False
+    data["custom_providers"] = kept
+    _save_local(data)
+    clear_custom_cache()
+    return True
+
+
+_CUSTOM_CACHE: dict[str, dict[str, Any]] | None = None
+
+
+def clear_custom_cache() -> None:
+    global _CUSTOM_CACHE
+    _CUSTOM_CACHE = None
+
+
+def custom_providers() -> dict[str, dict[str, Any]]:
+    global _CUSTOM_CACHE
+    if _CUSTOM_CACHE is not None:
+        return _CUSTOM_CACHE
+    raw = _local_config().get("custom_providers") or []
+    out: dict[str, dict[str, Any]] = {}
+    for entry in raw:
+        if isinstance(entry, dict) and entry.get("id"):
+            pid = str(entry["id"]).lower()
+            out[pid] = {
+                "id": pid,
+                "name": str(entry.get("name") or pid)[:100],
+                "base_url": normalize_base_url(str(entry.get("base_url") or ""))[:500],
+                "model": str(entry.get("model") or "")[:200],
+            }
+    _CUSTOM_CACHE = out
+    return out
+
+
+def get_custom_provider(provider_id: str) -> dict[str, Any] | None:
+    return custom_providers().get((provider_id or "").lower())
+
+
+def is_custom_provider(provider_id: str) -> bool:
+    return provider_id.lower() in custom_providers()

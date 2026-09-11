@@ -6,6 +6,8 @@
 app_name: "AK Dev Arena"
 version: "1.2.0"
 
+# Bind only to loopback by default (safe). For LAN/preview expose with
+# ARENA_HOST=0.0.0.0 and list extra origins in ARENA_CORS_ORIGINS.
 server:
   host: "127.0.0.1"
   port: 8000
@@ -29,14 +31,27 @@ providers:
   openrouter: { timeout: 180 }
 
 # Agent permissions (OpenCode-style): allow | ask | deny per tool.
+# Dangerous actions (delete, install, servers, git writes) ask by default.
 permissions:
   list_files: allow
   read_file: allow
   write_file: allow
+  edit_file: allow
+  delete_file: ask
   search: allow
   run: allow
+  run_build: allow
+  run_tests: allow
+  install_dependency: ask
+  start_server: ask
+  stop_server: allow
+  git_status: allow
+  git_diff: allow
+  git_checkpoint: ask
+  git_revert: ask
   web_search: allow
   web_fetch: allow
+  browser_inspect: ask
   todo: allow
   mcp: ask
 

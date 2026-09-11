@@ -7,8 +7,11 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
+    host: "0.0.0.0",
     port: 1420,
     strictPort: true,
+    // Allow the Arena live-preview host (and any LAN host for Tauri/phone testing).
+    allowedHosts: true,
     proxy: {
       "/api": "http://127.0.0.1:8000",
       "/health": "http://127.0.0.1:8000",

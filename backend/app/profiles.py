@@ -11,9 +11,17 @@ from typing import Any
 PROFILES: dict[str, dict[str, Any]] = {
     "coder": {
         "name": "Coder",
-        "description": "Reads, writes and runs code. Default builder.",
-        "tools": ["list_files", "read_file", "write_file", "search", "run", "todo", "mcp"],
-        "system": "You are a coding specialist. Make minimal, correct changes and verify with tools.",
+        "description": "Reads, edits, deletes, builds, tests and runs code. Default builder.",
+        "tools": [
+            "list_files", "read_file", "write_file", "edit_file", "delete_file",
+            "search", "run", "run_build", "run_tests", "install_dependency",
+            "start_server", "stop_server",
+            "git_status", "git_diff", "git_checkpoint", "git_revert",
+            "browser_inspect",
+            "todo", "mcp",
+        ],
+        "system": ("You are a coding specialist. Make minimal, correct changes, then ACTUALLY "
+                   "run the build/tests and verify before reporting done."),
     },
     "researcher": {
         "name": "Researcher",

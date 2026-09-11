@@ -30,6 +30,7 @@
 | LLM router | `backend/app/llm.py` | One interface for every provider via LiteLLM |
 | Vault | `backend/app/vault.py` | Reads keys from env / `config.local.yaml`; API only exposes booleans, never key values |
 | Config | `backend/app/config.py` + `config.yaml` | All settings, no secrets |
+| Context engine | `backend/app/contextx.py` | Chat instructions (global, `config.local.yaml`) + project rules (`.akrules`) + `@mentions` — injected into Chat, Agent, Composer, Build, Review |
 | Frontend | `frontend/src/` | Chat UI now; editor/diff/terminal/preview in later phases |
 | Desktop shell | `src-tauri/` | Native window + packaging (Phase 8) |
 

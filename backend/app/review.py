@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from . import llm
+from . import contextx, llm
 
 REVIEW_PROMPT = """You are a strict senior code reviewer. Review the diff below.
 Reply with EXACTLY ONE JSON object, no other text:
@@ -27,10 +27,11 @@ class ReviewError(Exception):
 async def review_diff(diff: str, model: str) -> dict[str, Any]:
     if not diff.strip():
         raise ReviewError("Empty diff — nothing to review.")
-    resp = await llm.chat_completion(model, [
+    messages = contextx.inject_context([
         {"role": "system", "content": REVIEW_PROMPT},
         {"role": "user", "content": f"DIFF:\n{diff[:12000]}"},
-    ], max_tokens=2000, temperature=0.2)
+    ])
+    resp = await llm.chat_completion(model, messages, max_tokens=2000, temperature=0.2)
     raw = resp.get("content", "")
     try:
         obj = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])

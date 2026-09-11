@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { ModelEntry, ModelQuery, ProviderEntry, UsageSummary } from "../api";
-import { deleteKey, refreshCatalog, saveKey } from "../api";
+import type { CustomProvider, InstructionsState, ModelEntry, ModelQuery, ProviderEntry, UsageSummary } from "../api";
+import { addCustomProvider, deleteCustomProvider, deleteKey, getCustomProviders, refreshCatalog, saveKey } from "../api";
 
 export interface ModeDef {
   key: string;
@@ -24,6 +24,8 @@ interface Props {
   onKeysChanged: () => void;
   usage: UsageSummary | null;
   onPalette: () => void;
+  onOpenInstructions: () => void;
+  instructions?: InstructionsState | null;
 }
 
 export default function Sidebar({
@@ -40,6 +42,8 @@ export default function Sidebar({
   onKeysChanged,
   usage,
   onPalette,
+  onOpenInstructions,
+  instructions,
 }: Props) {
   const [keysOpen, setKeysOpen] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -47,6 +51,21 @@ export default function Sidebar({
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState(modelQuery.search ?? "");
   const [refreshing, setRefreshing] = useState(false);
+  const [customs, setCustoms] = useState<CustomProvider[]>([]);
+  const [customForm, setCustomForm] = useState({ id: "", name: "", base_url: "", model: "" });
+  const [customSaving, setCustomSaving] = useState(false);
+
+  const loadCustoms = async () => {
+    try {
+      setCustoms(await getCustomProviders());
+    } catch {
+      /* sidebar must never crash on provider list failure */
+    }
+  };
+
+  useEffect(() => {
+    loadCustoms();
+  }, []);
 
   const configuredCount = providers.filter((p) => p.configured).length;
 
@@ -101,6 +120,33 @@ export default function Sidebar({
       setError(e instanceof Error ? e.message : "Refresh failed");
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const handleAddCustom = async () => {
+    if (!customForm.id.trim() || !customForm.base_url.trim()) return;
+    setCustomSaving(true);
+    setError(null);
+    try {
+      await addCustomProvider(customForm);
+      setCustomForm({ id: "", name: "", base_url: "", model: "" });
+      await loadCustoms();
+      onKeysChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Add failed");
+    } finally {
+      setCustomSaving(false);
+    }
+  };
+
+  const handleDeleteCustom = async (id: string) => {
+    setError(null);
+    try {
+      await deleteCustomProvider(id);
+      await loadCustoms();
+      onKeysChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed");
     }
   };
 
@@ -201,10 +247,20 @@ export default function Sidebar({
       {usage && (
         <div className="px-5 pb-2 text-[11px] text-zinc-600">
           📊 {usage.totals.calls} calls · {(usage.totals.total / 1000).toFixed(1)}k tokens
+          {usage.totals.cost > 0 && <> · ~${usage.totals.cost.toFixed(3)} (est.)</>}
         </div>
       )}
 
-      <div className="p-4 border-t border-zinc-800">
+      <div className="p-4 border-t border-zinc-800 space-y-2">
+        <button
+          onClick={onOpenInstructions}
+          className="flex items-center justify-between w-full rounded-lg bg-zinc-900 border border-zinc-700 px-4 py-2.5 text-sm font-semibold hover:border-indigo-500"
+        >
+          <span>📋 Instructions</span>
+          <span className={`text-[11px] font-normal ${instructions?.global_found || instructions?.project_found ? "text-emerald-400" : "text-zinc-600"}`}>
+            {instructions?.global_found || instructions?.project_found ? "on" : "off"}
+          </span>
+        </button>
         <button
           onClick={() => setKeysOpen((v) => !v)}
           className="w-full rounded-lg bg-zinc-900 border border-zinc-700 px-4 py-2.5 text-sm font-semibold hover:border-indigo-500"
@@ -251,6 +307,50 @@ export default function Sidebar({
                 {!p.needs_key && <div className="text-[11px] text-zinc-500">Local — no key needed. Just run `ollama serve`.</div>}
               </div>
             ))}
+
+            {/* custom OpenAI-compatible providers (saved locally, keys via
+                ARENA_CUSTOM_<ID>_KEY — never uploaded) */}
+            <div className="rounded-lg bg-zinc-900 border border-zinc-800 p-3">
+              <div className="text-sm font-semibold mb-2">🔌 Custom provider</div>
+              {customs.map((c) => (
+                <div key={c.id} className="flex items-center gap-2 text-xs mb-1.5">
+                  <span className="font-mono text-emerald-400">{c.id}</span>
+                  <span className="text-zinc-500 truncate flex-1">{c.base_url}</span>
+                  <button onClick={() => handleDeleteCustom(c.id)} className="text-zinc-600 hover:text-red-400">✕</button>
+                </div>
+              ))}
+              {customs.length === 0 && (
+                <div className="text-[11px] text-zinc-600 mb-2">Any OpenAI-compatible endpoint (OpenRouter, OpenCode, local llm…)</div>
+              )}
+              <input
+                value={customForm.id}
+                onChange={(e) => setCustomForm({ ...customForm, id: e.target.value })}
+                placeholder="id (myai)"
+                className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1.5 text-xs mb-1.5 outline-none focus:border-indigo-500"
+              />
+              <input
+                value={customForm.base_url}
+                onChange={(e) => setCustomForm({ ...customForm, base_url: e.target.value })}
+                placeholder="https://api.myai.dev/v1"
+                className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1.5 text-xs mb-1.5 outline-none focus:border-indigo-500"
+              />
+              <input
+                value={customForm.model}
+                onChange={(e) => setCustomForm({ ...customForm, model: e.target.value })}
+                placeholder="default model (optional)"
+                className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1.5 text-xs mb-1.5 outline-none focus:border-indigo-500"
+              />
+              <button
+                onClick={handleAddCustom}
+                disabled={customSaving || !customForm.id.trim() || !customForm.base_url.trim()}
+                className="w-full text-xs font-semibold py-1.5 rounded bg-indigo-700 disabled:opacity-40 hover:bg-indigo-600"
+              >
+                {customSaving ? "saving…" : "+ Add provider"}
+              </button>
+              <div className="text-[10px] text-zinc-600 mt-2">
+                Key: set env <code>ARENA_CUSTOM_{customForm.id || "ID"}_KEY</code> — or use any provider key above.
+              </div>
+            </div>
           </div>
         )}
       </div>

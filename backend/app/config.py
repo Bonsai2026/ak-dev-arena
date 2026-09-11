@@ -40,8 +40,14 @@ class AppConfig(BaseModel):
     permissions: dict[str, str] = Field(
         default_factory=lambda: {
             "list_files": "allow", "read_file": "allow", "write_file": "allow",
-            "search": "allow", "run": "allow", "web_search": "allow",
-            "web_fetch": "allow", "todo": "allow", "mcp": "ask",
+            "edit_file": "allow", "delete_file": "ask",
+            "search": "allow", "run": "allow", "run_build": "allow",
+            "run_tests": "allow", "install_dependency": "ask",
+            "start_server": "ask", "stop_server": "allow",
+            "git_status": "allow", "git_diff": "allow",
+            "git_checkpoint": "ask", "git_revert": "ask",
+            "web_search": "allow", "web_fetch": "allow", "browser_inspect": "ask",
+            "todo": "allow", "mcp": "ask",
         }
     )
     hooks: dict[str, str] = Field(default_factory=dict)

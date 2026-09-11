@@ -49,7 +49,11 @@ def _read_local_file() -> dict[str, Any]:
 
 
 def env_var_for(provider: str) -> str | None:
-    """Resolve the env var for ANY catalog provider (OpenCode-style)."""
+    """Resolve the env var for ANY catalog provider (OpenCode-style).
+
+    Custom providers (added via the UI) get a synthetic env var so their key
+    is injected the same way as any other provider.
+    """
     provider = (provider or "").lower()
     if provider in STATIC_ENV_VARS:
         return STATIC_ENV_VARS[provider]
@@ -57,6 +61,8 @@ def env_var_for(provider: str) -> str | None:
     if entry:
         env = entry.get("env") or []
         return env[0] if env else None
+    if catalog.is_custom_provider(provider):
+        return f"ARENA_CUSTOM_{provider.upper()}_KEY"
     return None
 
 

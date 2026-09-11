@@ -12,7 +12,7 @@ from typing import Any, AsyncIterator
 
 import litellm
 
-from . import catalog, vault
+from . import catalog, usage as usage_mod, vault
 
 # litellm can be chatty; keep server logs clean
 litellm.suppress_debug_info = True
@@ -87,8 +87,14 @@ def _friendly_error(exc: Exception, provider: str) -> ArenaLLMError:
         if provider == "ollama":
             return ArenaLLMError("Cannot reach Ollama. Is `ollama serve` running on http://localhost:11434?")
         return ArenaLLMError(f"Cannot reach '{provider}'. Check your internet connection.")
+    if "InternalServerError" in name or "500" in msg or "server_error" in msg.lower():
+        return ArenaLLMError(f"Provider '{provider}' had a server error. Try again in a moment.")
+    if "BadRequest" in name or "400" in msg:
+        return ArenaLLMError(f"Provider '{provider}' rejected the request. Check the model id and prompt size.")
+    if "Timeout" in name or "timeout" in msg.lower():
+        return ArenaLLMError(f"Provider '{provider}' timed out. Try again.")
     short = msg.strip().split("\n")[0][:300]
-    return ArenaLLMError(f"LLM call failed ({name}): {short}")
+    return ArenaLLMError(f"LLM call failed ({name}) on '{provider}': {short}")
 
 
 async def chat_completion(
@@ -118,6 +124,12 @@ async def chat_completion(
         }
     except Exception:  # noqa: BLE001, S110 — usage is best-effort
         pass
+    # Every LLM call is tracked centrally (tokens only, never content).
+    usage_mod.record(
+        model=str(resp.model or model), provider=provider,
+        prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
+        completion_tokens=int(usage.get("completion_tokens", 0) or 0), stream=False,
+    )
     return {"content": content, "model": resp.model or model, "provider": provider, "usage": usage}
 
 

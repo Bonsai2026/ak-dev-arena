@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import files, llm
+from . import contextx, files, llm
 
 BUILDS_DIR = "builds"
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-_]{0,60}$")
@@ -143,10 +143,11 @@ async def fix_build(name: str, error: str, model: str,
     if not target.is_dir():
         raise BuildError(f"Project '{name}' not found.")
     listing = sorted(p.relative_to(target).as_posix() for p in target.rglob("*") if p.is_file())
-    resp = await llm.chat_completion(model, [
+    messages = contextx.inject_context([
         {"role": "system", "content": FIX_PROMPT},
         {"role": "user", "content": f"PROJECT FILES:\n{json.dumps(listing)}\n\nERROR:\n{error[:2000]}"},
-    ], max_tokens=1500, temperature=0.2)
+    ], root=root)
+    resp = await llm.chat_completion(model, messages, max_tokens=1500, temperature=0.2)
     raw = resp.get("content", "")
     try:
         patch = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])

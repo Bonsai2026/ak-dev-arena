@@ -8,22 +8,38 @@ API docs:
 
 from __future__ import annotations
 
+import asyncio
+import hmac
 import json
+import logging
+import os
 from typing import Any, Literal
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
+
+# -------------------------------------------------------------------------
+# Logging — structured-ish, secret-free. API keys are NEVER logged (the vault
+# injects them directly into LLM calls and nothing here prints request bodies).
+# -------------------------------------------------------------------------
+logging.basicConfig(
+    level=os.environ.get("ARENA_LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+log = logging.getLogger("akdevstudio")
 
 from . import (
     __version__,
     agent,
     aider_engine,
+    browser,
     builder,
     catalog,
     config,
     contextx,
+    execjobs,
     files,
     gitops,
     llm,
@@ -32,23 +48,78 @@ from . import (
     profiles,
     review,
     slash,
+    store,
     todos,
     usage,
     vault,
     voice,
     web,
     workflows,
+    workspacex,
 )
 
-app = FastAPI(title="AK Dev Arena", version=__version__)
+app = FastAPI(title="AK Dev Studio", version=__version__)
 
-# Local dev: the Vite/Tauri UI talks to this server on localhost.
+
+@app.on_event("startup")
+def _restore_persisted_state() -> None:
+    """Bring back agent tasks + run-job history from the last session.
+    Anything that was mid-flight is honestly marked 'interrupted'."""
+    try:
+        store.restore_state()
+    except Exception:  # noqa: BLE001, S110 — persistence must never break boot
+        pass
+
+
+# Security: only the app's own UI origins may call the API. Override for extra
+# origins (e.g. a LAN/Tauri build) via ARENA_CORS_ORIGINS="a,b,c".
+DEFAULT_CORS = (
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+)
+CORS_ORIGINS = [o.strip() for o in
+                os.environ.get("ARENA_CORS_ORIGINS", ",".join(DEFAULT_CORS)).split(",")
+                if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# LAN/shared-host protection: when ARENA_TOKEN is set, every /api call needs
+# `Authorization: Bearer <token>` (or X-Arena-Token). Loopback-only setups can
+# leave it unset and keep the zero-config flow. /api/health stays open so the
+# desktop shell / start.bat can still probe readiness.
+ARENA_TOKEN = os.environ.get("ARENA_TOKEN", "").strip()
+# Paths that never need the token (readiness probes, nothing sensitive).
+# (/health is outside /api/* so it's open anyway; /api/health kept as alias.)
+TOKEN_OPEN_PATHS = {"/api/health", "/health"}
+
+
+@app.middleware("http")
+async def _token_guard(request: Request, call_next):  # noqa: ANN001
+    if ARENA_TOKEN and request.url.path.startswith("/api/"):
+        if request.method != "OPTIONS" and request.url.path not in TOKEN_OPEN_PATHS:
+            header = request.headers.get("authorization", "")
+            provided = ""
+            if header.lower().startswith("bearer "):
+                provided = header.split(" ", 1)[1].strip()
+            provided = provided or request.headers.get("x-arena-token", "").strip()
+            # EventSource can't set headers → accept ?token= for SSE endpoints.
+            provided = provided or (request.query_params.get("token") or "").strip()
+            if not hmac.compare_digest(provided, ARENA_TOKEN):
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Missing or wrong ARENA_TOKEN "
+                                       "(send 'Authorization: Bearer <token>')."})
+    return await call_next(request)
 
 COMPOSER_PROMPT = """You output multi-file patches as EXACTLY ONE JSON object, no other text:
 {"patches": [{"path": "relative/path", "old_text": "exact snippet to replace", "new_text": "replacement"}]}
@@ -95,11 +166,26 @@ class UndoRequest(BaseModel):
     path: str = Field(default="", max_length=500)
 
 
+class InstructionsBody(BaseModel):
+    content: str = Field(max_length=50_000)
+
+
+class RulesBody(BaseModel):
+    content: str = Field(max_length=20_000)
+
+
 class AgentRequest(BaseModel):
     task: str = Field(min_length=1, max_length=20_000)
     model: str = Field(default="", max_length=200)
     max_steps: int = Field(default=8, ge=1, le=25)
     profile: str = Field(default="coder", max_length=20)
+    auto_commit: bool = False  # commit ONLY if task finishes verified
+
+
+class ContinueRequest(BaseModel):
+    follow_up: str = Field(min_length=1, max_length=20_000)
+    model: str = Field(default="", max_length=200)
+    max_steps: int = Field(default=8, ge=1, le=25)
 
 
 class PlanRequest(BaseModel):
@@ -207,6 +293,23 @@ class WebFetchReq(BaseModel):
     url: str = Field(min_length=10, max_length=2000)
 
 
+class RunReq(BaseModel):
+    action: Literal["install", "build", "test", "serve"] = "build"
+    path: str = Field(default="", max_length=500)
+    port: int | None = Field(default=None, ge=1024, le=65535)
+    timeout: int = Field(default=600, ge=10, le=3600)
+
+
+class CleanupReq(BaseModel):
+    max_age_hours: int = Field(default=24, ge=1, le=720)
+    max_bytes: int = Field(default=200 * 1024 * 1024, ge=0, le=10**11)
+
+
+class BrowserInspectReq(BaseModel):
+    url: str = Field(min_length=10, max_length=2000)
+    actions: list[dict[str, Any]] = Field(default_factory=list, max_length=10)
+
+
 # --------------------------------------------------------------- helpers ---
 
 
@@ -233,6 +336,50 @@ def health() -> dict[str, str]:
     return {"status": "ok", "version": __version__}
 
 
+@app.get("/api/diagnostics")
+def diagnostics() -> dict[str, Any]:
+    """Environment health: what AK Dev Studio can actually use right now."""
+    import shutil
+    import subprocess
+
+    def _which(name: str) -> bool:
+        return shutil.which(name) is not None
+
+    def _ver(cmd: list[str]) -> str:
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            return (out.stdout or out.stderr).strip().splitlines()[0][:80]
+        except Exception:  # noqa: BLE001, S110 — diagnostics must never crash
+            return ""
+
+    ws = files._root(None)  # noqa: SLF001 — same package
+    writable = os.access(ws, os.W_OK)
+    ollama = False
+    try:
+        import httpx
+
+        r = httpx.get(catalog.OLLAMA_BASE + "/api/tags", timeout=1.5)
+        ollama = r.status_code == 200
+    except Exception:  # noqa: BLE001, S110 — ollama is optional
+        pass
+    providers_status = vault.provider_status()
+    configured = [p for p in providers_status if p.get("configured")]
+    return {
+        "version": __version__,
+        "workspace": {"path": str(ws), "writable": writable},
+        "python": _which("python") or _which("python3"),
+        "node": _which("node"),
+        "npm": _which("npm"),
+        "git": _which("git"),
+        "ollama": ollama,
+        "ollama_base": catalog.OLLAMA_BASE,
+        "providers_total": len(providers_status),
+        "providers_configured": len(configured),
+        "provider_names": [p.get("provider") for p in configured],
+        "hints": [] if writable else ["Workspace is not writable."],
+    }
+
+
 @app.get("/api/config")
 def get_public_config() -> dict[str, Any]:
     return config.get_config().safe_dict()
@@ -257,6 +404,38 @@ def list_models(provider: str = "", search: str = "", free_only: bool = False,
 @app.get("/api/providers")
 def list_providers() -> dict[str, Any]:
     return {"providers": vault.provider_status()}
+
+
+# ------------------------------------------------ custom providers ---
+# OpenAI-compatible endpoints saved in config.local.yaml (API keys go to the
+# vault under ARENA_CUSTOM_<ID>_KEY). Base URLs are normalized (no double /v1).
+
+
+class CustomProviderRequest(BaseModel):
+    id: str = Field(min_length=1, max_length=50, pattern=r"^[A-Za-z0-9_-]+$")
+    name: str = Field(default="", max_length=100)
+    base_url: str = Field(min_length=1, max_length=500)
+    model: str = Field(default="", max_length=200)
+
+
+@app.get("/api/providers/custom")
+def list_custom_providers() -> dict[str, Any]:
+    return {"providers": list(catalog.custom_providers().values())}
+
+
+@app.post("/api/providers/custom")
+def create_custom_provider(body: CustomProviderRequest) -> dict[str, Any]:
+    try:
+        return {"provider": catalog.upsert_custom_provider(
+            body.id, body.name, body.base_url, body.model)}
+    except catalog.CatalogError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/providers/custom/{provider_id}")
+def delete_custom_provider(provider_id: str) -> dict[str, Any]:
+    return {"deleted": catalog.remove_custom_provider(provider_id),
+            "id": provider_id.lower()}
 
 
 @app.post("/api/keys")
@@ -417,10 +596,11 @@ async def api_composer(body: ComposerRequest) -> dict[str, Any]:
     model = body.model or _default_model("code")
     tree = contextx._tree_text(None)  # noqa: SLF001 — same package
     try:
-        resp = await llm.chat_completion(model, [
+        messages = contextx.inject_context([
             {"role": "system", "content": COMPOSER_PROMPT},
             {"role": "user", "content": f"WORKSPACE TREE:\n{tree}\n\nTASK:\n{body.instructions}"},
-        ], max_tokens=3000, temperature=0.2)
+        ])
+        resp = await llm.chat_completion(model, messages, max_tokens=3000, temperature=0.2)
     except llm.ArenaLLMError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     raw = resp.get("content", "")
@@ -500,6 +680,32 @@ def api_rules() -> dict[str, Any]:
     return {"rules": rules, "found": bool(rules)}
 
 
+@app.get("/api/context/instructions")
+def api_instructions() -> dict[str, Any]:
+    """Chat instructions: global (user-level) + project (.akrules) — Cursor/Claude/Codex-style."""
+    return contextx.rules_summary()
+
+
+@app.put("/api/context/instructions")
+def api_save_instructions(body: InstructionsBody) -> dict[str, Any]:
+    """Save user-level chat instructions (persisted in git-ignored config.local.yaml)."""
+    contextx.save_global_instructions(body.content)
+    return contextx.rules_summary()
+
+
+@app.post("/api/context/rules")
+def api_save_rules(body: RulesBody) -> dict[str, Any]:
+    """Save project rules to .akrules in the workspace root."""
+    contextx.save_rules(body.content)
+    return contextx.rules_summary()
+
+
+@app.delete("/api/context/rules")
+def api_delete_rules() -> dict[str, Any]:
+    contextx.delete_rules()
+    return contextx.rules_summary()
+
+
 # ---------------------------------------------------- agent mode routes ---
 
 
@@ -507,6 +713,109 @@ def api_rules() -> dict[str, Any]:
 async def api_agent_run(body: AgentRequest) -> dict[str, Any]:
     model = body.model or _default_model("agent")
     return await agent.run_agent(body.task, model, body.max_steps, profile=body.profile or "coder")
+
+
+# Long-running agent tasks: progress + cancellation (Phase B heart).
+@app.post("/api/agent/tasks")
+async def api_agent_task_create(body: AgentRequest) -> dict[str, Any]:
+    model = body.model or _default_model("agent")
+    task_state = agent.create_task(body.task, model, body.max_steps,
+                                   profile=body.profile or "coder",
+                                   auto_commit=body.auto_commit)
+    log.info("agent task started id=%s profile=%s", task_state["id"], body.profile or "coder")
+    return task_state
+
+
+@app.post("/api/agent/tasks/{task_id}/continue")
+async def api_agent_task_continue(task_id: str, body: ContinueRequest) -> dict[str, Any]:
+    model = body.model or _default_model("agent")
+    try:
+        return agent.continue_task(task_id, body.follow_up, model=model,
+                                   max_steps=body.max_steps)
+    except agent.AgentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/agent/tasks")
+def api_agent_task_list() -> dict[str, Any]:
+    return {"tasks": agent.list_tasks()}
+
+
+@app.get("/api/agent/tasks/{task_id}")
+def api_agent_task_get(task_id: str) -> dict[str, Any]:
+    state = agent.get_task(task_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    return state
+
+
+# Server-sent events: pushes the task state whenever it changes instead of the
+# UI polling every 1.2s. Closes itself once the task reaches a terminal state.
+_TERMINAL_AGENT = ("done", "failed", "cancelled", "timeout", "interrupted",
+                   "complete")
+
+
+@app.get("/api/agent/tasks/{task_id}/events")
+async def api_agent_task_events(task_id: str):
+    if not agent.get_task(task_id):
+        raise HTTPException(status_code=404, detail="Task not found.")
+
+    async def event_generator():
+        last = ""
+        idle = 0
+        while True:
+            state = agent.get_task(task_id)
+            if state is None:  # pruned/gone mid-stream
+                yield "data: {\"detail\":\"task gone\"}\n\n"
+                return
+            try:
+                blob = json.dumps(state, default=str)
+            except (TypeError, ValueError):
+                blob = json.dumps({"id": task_id, "status": state.get("status")})
+            if blob != last:
+                last = blob
+                yield f"data: {blob}\n\n"
+            if state.get("status") in _TERMINAL_AGENT:
+                return
+            await asyncio.sleep(0.35)
+            idle += 1
+            if idle % 40 == 0:  # ~14s keep-alive comment (no UI effect)
+                yield ": keep-alive\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.delete("/api/agent/tasks/{task_id}")
+def api_agent_task_cancel(task_id: str) -> dict[str, Any]:
+    state = agent.get_task(task_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    cancelled = agent.cancel_task(task_id)
+    return {"id": task_id, "cancelled": cancelled, "status": state["status"]}
+
+
+# Diff review + 1-click undo for every file the agent touched.
+class RevertRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=500)
+
+
+@app.get("/api/agent/tasks/{task_id}/changes")
+def api_agent_task_changes(task_id: str) -> dict[str, Any]:
+    if not agent.get_task(task_id):
+        raise HTTPException(status_code=404, detail="Task not found.")
+    return {"changes": agent.task_changes(task_id)}
+
+
+@app.post("/api/agent/tasks/{task_id}/changes/revert")
+def api_agent_task_revert(task_id: str, body: RevertRequest) -> dict[str, Any]:
+    try:
+        return agent.revert_change(task_id, body.path)
+    except agent.AgentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.post("/api/agent/plan")
@@ -763,6 +1072,66 @@ def api_workflows_get_run(run_id: str) -> dict[str, Any]:
     if not run:
         raise HTTPException(status_code=404, detail="Run not found.")
     return run
+
+
+# ----------------------------------------------------- workspace routes ---
+
+
+@app.get("/api/workspace")
+def api_workspace() -> dict[str, Any]:
+    return {"layout": workspacex.ensure(), "usage": workspacex.usage()}
+
+
+@app.post("/api/workspace/cleanup")
+def api_workspace_cleanup(body: CleanupReq) -> dict[str, Any]:
+    result = workspacex.cleanup(body.max_age_hours, body.max_bytes)
+    log.info("workspace cleanup removed=%s files=%s bytes", result["removed_files"], result["removed_bytes"])
+    return result
+
+
+# ------------------------------------------------------ run/build routes ---
+
+
+@app.post("/api/run")
+async def api_run(body: RunReq) -> dict[str, Any]:
+    try:
+        job = execjobs.start(body.action, body.path, port=body.port, timeout=body.timeout)
+        log.info("exec job started id=%s action=%s", job["id"], body.action)
+        return job
+    except execjobs.ExecError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/run")
+def api_run_list() -> dict[str, Any]:
+    return {"jobs": execjobs.list_jobs()}
+
+
+@app.get("/api/run/{job_id}")
+def api_run_get(job_id: str) -> dict[str, Any]:
+    job = execjobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return job
+
+
+@app.delete("/api/run/{job_id}")
+def api_run_cancel(job_id: str) -> dict[str, Any]:
+    job = execjobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return {"id": job_id, "cancelled": execjobs.cancel(job_id), "status": job["status"]}
+
+
+# ------------------------------------------------------ browser routes ---
+
+
+@app.post("/api/browser/inspect")
+async def api_browser_inspect(body: BrowserInspectReq) -> dict[str, Any]:
+    try:
+        return await browser.inspect(body.url, body.actions)
+    except browser.BrowserError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------- web routes ---

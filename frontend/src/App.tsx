@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Sidebar, { type ModeDef } from "./components/Sidebar";
 import Chat from "./components/Chat";
 import Code from "./components/Code";
@@ -7,8 +7,9 @@ import Manager from "./components/Manager";
 import Build from "./components/Build";
 import Review from "./components/Review";
 import Voice from "./components/Voice";
+import Instructions from "./components/Instructions";
 import Palette, { type PaletteAction } from "./components/Palette";
-import { getModels, getProviders, getUsage, slashRun, streamChat } from "./api";
+import { getInstructions, getModels, getProviders, getUsage, slashRun, streamChat, type InstructionsState } from "./api";
 import type { ChatMessage, ModelEntry, ModelQuery, ProviderEntry, UsageSummary } from "./api";
 
 const MODES: ModeDef[] = [
@@ -30,9 +31,16 @@ export default function App() {
   const [currentModel, setCurrentModel] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
   const [backendUp, setBackendUp] = useState<boolean | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
+  const [instructionsState, setInstructionsState] = useState<InstructionsState | null>(null);
+
+  useEffect(() => {
+    getInstructions().then(setInstructionsState).catch(() => {});
+  }, []);
 
   const refreshCatalog = useCallback(async () => {
     try {
@@ -114,18 +122,29 @@ export default function App() {
     setMessages([...next, { role: "assistant" as const, content: "" }]);
     setStreaming(true);
     let acc = "";
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       await streamChat(currentModel, next, (token) => {
         acc += token;
         pushAssistant(acc);
-      });
+      }, controller.signal);
     } catch (e) {
-      pushAssistant(`⚠️ ${e instanceof Error ? e.message : "Request failed"}`);
+      if (e instanceof DOMException && e.name === "AbortError") {
+        pushAssistant(acc ? `${acc}  \n\n⏹ *Stopped by you.*` : "⏹ *Stopped by you.*");
+      } else {
+        pushAssistant(`⚠️ ${e instanceof Error ? e.message : "Request failed"}`);
+      }
     } finally {
+      abortRef.current = null;
       setStreaming(false);
       refreshUsage();
     }
   };
+
+  const stopChat = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
 
   const handleTranscript = (text: string) => {
     setMode("chat");
@@ -144,6 +163,7 @@ export default function App() {
         hint: "mode",
         run: () => setMode(m.key),
       })),
+      { label: "📋 Chat instructions", hint: "rules", run: () => setInstructionsOpen(true) },
       { label: "🧹 Clear chat", hint: "chat", run: () => setMessages([]) },
       { label: "🔄 Refresh models & keys", hint: "catalog", run: () => refreshCatalog() },
       { label: "📊 Refresh usage", hint: "usage", run: () => refreshUsage() },
@@ -187,10 +207,12 @@ export default function App() {
         }}
         usage={usage}
         onPalette={() => setPaletteOpen(true)}
+        onOpenInstructions={() => setInstructionsOpen(true)}
+        instructions={instructionsState}
       />
       <main className="flex-1 min-w-0 h-full">
-        {mode === "chat" && <Chat messages={messages} streaming={streaming} ready={ready} onSend={handleSend} />}
-        {mode === "code" && <Code model={currentModel} />}
+        {mode === "chat" && <Chat messages={messages} streaming={streaming} ready={ready} onSend={handleSend} onStop={stopChat} instructions={instructionsState} />}
+        {mode === "code" && <Code model={currentModel} onOpenInstructions={() => setInstructionsOpen(true)} rules={instructionsState} />}
         {mode === "agent" && <Agent model={currentModel} />}
         {mode === "manager" && <Manager model={currentModel} />}
         {mode === "build" && <Build model={currentModel} />}
@@ -198,6 +220,11 @@ export default function App() {
         {mode === "voice" && <Voice onTranscript={handleTranscript} lastAssistant={lastAssistant} />}
       </main>
       <Palette open={paletteOpen} actions={paletteActions} onClose={() => setPaletteOpen(false)} />
+      <Instructions
+        open={instructionsOpen}
+        onClose={() => setInstructionsOpen(false)}
+        onSaved={setInstructionsState}
+      />
     </div>
   );
 }

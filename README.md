@@ -6,11 +6,13 @@
 [![CI](https://github.com/Bonsai2026/ak-dev-arena/actions/workflows/ci.yml/badge.svg)](https://github.com/Bonsai2026/ak-dev-arena/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-1.2.0-brightgreen.svg)](config.yaml)
 [![Stack](https://img.shields.io/badge/stack-Tauri%20%2B%20React%20%2B%20FastAPI%20%2B%20LiteLLM-green.svg)](docs/ARCHITECTURE.md)
-[![Tests](https://img.shields.io/badge/tests-69%20passing-brightgreen.svg)](backend/tests)
+[![Tests](https://img.shields.io/badge/tests-79%20passing-brightgreen.svg)](backend/tests)
 
 Bring **any API key** — **215+ providers, 7,500+ models** via the open [models.dev](https://models.dev) registry (same formula OpenCode uses). Add one key → all its models auto-detect. **1,000+ models are FREE** 🆓 — or run **100% local** with Ollama. No lock-in. No ads. No subscriptions. Ever.
 
-**Real open-source engines mixed in:** models.dev catalog (OpenCode formula) · MCP protocol (Anthropic) · Aider repo-maps (auto when installed) · free web research · Cursor-style `@mentions` + rules + Composer + Tab-complete · Claude-style `/slash` + Plan + hooks + permissions · FreeBuff-style profiles + workflows · Manus-style todos + artifacts.
+**Real open-source engines mixed in:** models.dev catalog (OpenCode formula) · MCP protocol (Anthropic) · Aider repo-maps (auto when installed) · free web research · Cursor-style `@mentions` + **chat instructions** + Composer + Tab-complete · Claude-style `/slash` + Plan + hooks + permissions · FreeBuff-style profiles + workflows · Manus-style todos + artifacts.
+
+**📋 Chat instructions (new in v1.2):** set global instructions + project rules (`.akrules`) once, and they're auto-injected into every model call — Chat, Agent, Code Composer, Build and Review. Like Cursor rules · Claude `CLAUDE.md` · Codex `AGENTS.md`.
 
 ---
 
@@ -28,7 +30,7 @@ Bring **any API key** — **215+ providers, 7,500+ models** via the open [models
 
 Extras: **⌘K command palette** · **📊 usage tracker** (see every token) · **🔑 key vault** (keys never leak) · **🐳 sandbox-ready** agent design.
 
-Full plan: [`docs/ROADMAP.md`](docs/ROADMAP.md) · How it works: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · Shipping: [`docs/RELEASE.md`](docs/RELEASE.md)
+Full plan: [`docs/ROADMAP.md`](docs/ROADMAP.md) · How it works: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · Shipping: [`docs/RELEASE.md`](docs/RELEASE.md) · Honest status: [`docs/STATUS.md`](docs/STATUS.md)
 
 ---
 
@@ -41,30 +43,53 @@ Full plan: [`docs/ROADMAP.md`](docs/ROADMAP.md) · How it works: [`docs/ARCHITEC
 git clone https://github.com/Bonsai2026/ak-dev-arena.git
 cd ak-dev-arena
 
-# 2. Start the backend (brain 🧠)
-pip install -r backend/requirements.txt
-python -m uvicorn backend.app.main:app --port 8000
-# → API docs at http://127.0.0.1:8000/docs
+# 2. One-command setup (backend + optional engines + frontend)
+make setup
+# …or manually:
+#   pip install -r backend/requirements.txt
+#   pip install -r backend/requirements-optional.txt   # voice, web search, MCP, repo maps
+#   cd frontend && npm install && cd ..
 
-# 3. Start the frontend (face 😎) — in a new terminal
-cd frontend && npm install && npm run dev
+# 3. Start the backend (brain 🧠) — binds 127.0.0.1 by default (safe)
+make backend          # or: python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+# → API docs at http://127.0.0.1:8000/docs
+# Only expose to LAN/preview when you need it:
+#   ARENA_HOST=0.0.0.0 make backend      (add ARENA_CORS_ORIGINS for extra origins)
+
+# 4. Start the frontend (face 😎) — in a new terminal
+make frontend         # or: cd frontend && npm run dev
 # → App at http://localhost:1420
 ```
+
+**Set your chat instructions** (optional, like Cursor rules / Claude CLAUDE.md / Codex AGENTS.md):
+- Open **📋 Instructions** in the sidebar (or `⌘K` → “Chat instructions”).
+- **Global instructions** apply everywhere; **project rules** save as `.akrules` in `./workspace`.
+- Both are auto-injected into Chat, Agent, Code Composer, Build and Review.
 
 **Add your API key** (pick one):
 - In the app: click **🔑 Keys** in the sidebar, paste key, done.
 - Or via terminal: `export OPENAI_API_KEY=sk-...` (also `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, `GROQ_API_KEY`)
 - Or 100% local & free: install [Ollama](https://ollama.ai), run `ollama pull llama3.1`, pick the Ollama model in the app.
 
+**Windows first:** see [`docs/WINDOWS.md`](docs/WINDOWS.md) — one-click `start.bat`,
+Tauri shell (auto-starts the backend), and the smoke-test checklist. CI runs a
+Windows job (pytest + frontend build + Tauri check) on every push.
+
 **Voice mode extras (optional):** `pip install faster-whisper edge-tts`
+
+> **Security:** the backend binds `127.0.0.1` and CORS is allow-listed to the app's
+> own origins (no `*`). Web fetch rejects private/local addresses (SSRF guard),
+> the agent's shell is token allow-listed (no delete/install/push/metacharacters),
+> and git undo never destroys uncommitted user work (backup branch + dirty-tree
+> refusal). See `backend/tests/test_security.py`.
 
 ---
 
 ## 🧪 Tests
 
 ```bash
-pytest backend/tests -q        # 38 tests — chat, files, git, agent, jobs, build, review, voice, usage
-cd frontend && npm run build   # TypeScript + production build
+make test                      # 79 tests — chat, files, git, agent, jobs, build, review, voice, usage, instructions
+make build                     # TypeScript + production build
 ```
 
 ## 🗂️ Project structure
@@ -75,7 +100,7 @@ ak-dev-arena/
 │   ├── app/            #   main.py (API) · llm.py · vault.py · config.py
 │   │                   #   files.py · gitops.py · agent.py · manager.py
 │   │                   #   builder.py · review.py · voice.py · usage.py
-│   └── tests/          #   38 pytest tests (run in CI)
+│   └── tests/          #   132 pytest tests (run in CI)
 ├── frontend/           # React + Vite + Tailwind — the face (7 modes + ⌘K palette)
 ├── src-tauri/          # Tauri desktop shell (native packaging — needs Rust stable)
 ├── workspace/          # AI playground (git-ignored, created on first run)

@@ -42,6 +42,15 @@ def init(path: str = "", root: Path | None = None) -> dict:
     return {"initialized": True, "path": str(repo)}
 
 
+def diff(path: str = "", root: Path | None = None, max_chars: int = 12000) -> str:
+    """Unified diff of working-tree changes vs HEAD (empty if not a repo)."""
+    repo = _repo_root(path, root)
+    if not is_repo(path, root):
+        return ""
+    proc = _run(["diff", "HEAD"], repo)
+    return ((proc.stdout or "") + (proc.stderr or ""))[:max_chars]
+
+
 def status(path: str = "", root: Path | None = None) -> dict:
     repo = _repo_root(path, root)
     if not is_repo(path, root):
@@ -72,13 +81,33 @@ def checkpoint(path: str = "", message: str = "arena: checkpoint",
 
 
 def undo(path: str = "", root: Path | None = None) -> dict:
+    """Revert the last Arena checkpoint — NEVER destroying user work.
+
+    Safety rules:
+      1. Only reverts a commit with the "arena:" prefix (user history untouched).
+      2. Refuses if there are uncommitted changes (they would be lost).
+      3. Creates a backup branch (`arena-undo-backup-*`) before resetting so the
+         reverted state is always recoverable.
+    """
     repo = _repo_root(path, root)
     if not is_repo(path, root):
         raise GitError("Not a git repository.")
     last_msg = _run(["log", "-1", "--pretty=%s"], repo).stdout.strip()
     if not last_msg.startswith(ARENA_PREFIX):
         raise GitError("Last commit is not an Arena checkpoint — refusing to undo user history.")
+    porcelain = _run(["status", "--porcelain"], repo).stdout.splitlines()
+    if porcelain:
+        raise GitError(
+            "There are uncommitted changes after the checkpoint — refusing to destroy them. "
+            "Commit or stash them first, or use a fresh checkpoint."
+        )
+    count = _run(["rev-list", "--count", "HEAD"], repo).stdout.strip()
+    if count == "1":
+        raise GitError("Nothing to undo — only one checkpoint exists in this repo.")
+    head = _run(["rev-parse", "--short", "HEAD"], repo).stdout.strip() or "pre"
+    backup = f"arena-undo-backup-{head}"
+    _run(["branch", "-f", backup, "HEAD"], repo)  # recoverable snapshot
     proc = _run(["reset", "--hard", "HEAD~1"], repo)
     if proc.returncode != 0:
         raise GitError(f"Undo failed: {proc.stderr.strip()[:200]}")
-    return {"undone": True, "reverted": last_msg}
+    return {"undone": True, "reverted": last_msg, "backup": backup}

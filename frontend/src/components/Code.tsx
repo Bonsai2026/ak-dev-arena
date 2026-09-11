@@ -3,7 +3,6 @@ import {
   composerApply,
   composerPreview,
   completeCode,
-  getRules,
   gitCheckpoint,
   gitStatus,
   gitUndo,
@@ -14,13 +13,15 @@ import {
   searchFiles,
   writeFile,
 } from "../api";
-import type { ComposerPatchView, FileEntry, GitStatus, SearchHit } from "../api";
+import type { ComposerPatchView, FileEntry, GitStatus, InstructionsState, SearchHit } from "../api";
 
 interface Props {
   model: string;
+  onOpenInstructions: () => void;
+  rules?: InstructionsState | null;
 }
 
-export default function Code({ model }: Props) {
+export default function Code({ model, onOpenInstructions, rules }: Props) {
   const [tab, setTab] = useState<"editor" | "composer">("editor");
   const [dir, setDir] = useState("");
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -32,7 +33,6 @@ export default function Code({ model }: Props) {
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [git, setGit] = useState<GitStatus | null>(null);
   const [msg, setMsg] = useState("");
-  const [rulesFound, setRulesFound] = useState(false);
   const [completing, setCompleting] = useState(false);
   // composer
   const [instructions, setInstructions] = useState("");
@@ -43,10 +43,9 @@ export default function Code({ model }: Props) {
 
   const refresh = useCallback(async () => {
     try {
-      const [ents, status, rules] = await Promise.all([listFiles(dir), gitStatus(), getRules()]);
+      const [ents, status] = await Promise.all([listFiles(dir), gitStatus()]);
       setEntries(ents);
       setGit(status);
-      setRulesFound(rules.found);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Load failed");
     }
@@ -303,9 +302,15 @@ export default function Code({ model }: Props) {
             🎼 Composer
           </button>
           <span className="flex-1" />
-          <span className="text-xs text-zinc-500" title=".akrules project rules (Cursor-style)">
-            {rulesFound ? "🛡 rules on" : "🛡 no .akrules"}
-          </span>
+          <button
+            onClick={onOpenInstructions}
+            className="text-xs text-zinc-500 hover:text-indigo-300"
+            title="Chat instructions + .akrules project rules (Cursor/Claude/Codex-style)"
+          >
+            {rules?.global_found || rules?.project_found
+              ? `🛡 instructions on${rules?.project_found ? " · .akrules" : ""}`
+              : "📋 no instructions"}
+          </button>
         </div>
 
         {msg && <div className="px-4 py-1.5 text-xs text-zinc-400 border-b border-zinc-800">{msg}</div>}
